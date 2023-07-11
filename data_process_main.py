@@ -30,7 +30,6 @@ def main(chunk_num: int,
          just_save_clicked_data=False):
     with open("./columns.pkl", "rb") as f:
         cols = pickle.load(f)
-    chunk_num = chunk_num
     ranges_pkl_path = f"./user_ranges_lists_chunk_num_{chunk_num}.pkl"
     dpu = DataProcessUtils(columns=cols, chunk_num=chunk_num)
     if not os.path.exists(ranges_pkl_path):
