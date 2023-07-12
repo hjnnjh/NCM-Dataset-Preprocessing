@@ -81,20 +81,6 @@ class DataProcessUtils:
         return session_data
 
     @staticmethod
-    def _add_session_interval(session_data: Dict[str, List[Tuple[int, pd.DataFrame]]]):
-        logging.info("Adding Interval from the last session...")
-        for user, df_tuple_list in tqdm(session_data.items()):
-            for i, _, df in enumerate(df_tuple_list):
-                assert isinstance(df, pd.DataFrame)
-                if i == 0:
-                    df["sessionInterval"] = 0
-                else:
-                    last_session_end_time = df_tuple_list[i - 1][1]["impressTimeFormatted"].iloc[-1]
-                    df["sessionInterval"] = (df["impressTimeFormatted"].iloc[0] -
-                                             last_session_end_time).total_seconds()
-        return session_data
-
-    @staticmethod
     def _is_clicked_behavior_in_this_session_dataframe(each_tuple_in_sessions_list: Tuple[int, pd.DataFrame]):
         """
         If there are clicked behaviors in the dataframe of the user's single session
@@ -108,9 +94,9 @@ class DataProcessUtils:
         else:
             return True
 
-    def _retain_clicked_behavior_session_in_sessions(self, session_data_tuple_list: List[Tuple[int, pd.DataFrame]]):
+    def _reserve_clicked_behavior_session_in_sessions(self, session_data_tuple_list: List[Tuple[int, pd.DataFrame]]):
         """
-        Retain clicked behavior sessions
+        reserve clicked behavior sessions
         :param session_data_tuple_list:
         :return:
         """
@@ -121,15 +107,11 @@ class DataProcessUtils:
         else:
             return None
 
-    def _fill_nan(self,
-                  session_data: Dict[str, List[Tuple[int, pd.DataFrame]]] = None,
-                  full_data: pd.DataFrame = None):
+    @staticmethod
+    def _fill_nan(session_data: Dict[str, List[Tuple[int, pd.DataFrame]]] = None):
         logging.info("Checking `nan` in dataset and fill it...")
         new_filtered_session_data = {}  # Dict[int, Tuple[int, pd.Dataframe]]
         bad_df_ls = []
-        full_data["gender"] = full_data["gender"].map(self._convert_gender)
-        gender_median = full_data["gender"].median()
-        age_median = full_data["age"].median()
         for user, df_tuple_list in tqdm(session_data.items()):
             bad_content_id_df_ls = []
             for session_num, df in df_tuple_list:
@@ -142,27 +124,16 @@ class DataProcessUtils:
                 df["contentId"] = df["contentId"].fillna(value="-1,-1,-1")
                 try:
                     df[['contentId_1', 'contentId_2', 'contentId_3']] = df["contentId"].str.split(",", expand=True)
-                except Exception as exce:
-                    logging.warning(exce)
+                except Exception as exception:
+                    logging.warning(exception)
                     bad_content_id_df_ls.append(df)
                 # Fill `-1` in `talkId`
                 df["talkId"] = df["talkId"].fillna(value="-1")
                 df["talkId"] = df["talkId"].map(lambda x: str(int(x)))
                 # Make sure `mlogViewTime` > 0 when `isClick` == 1, set the `nan` to 0.1
-                df.loc[df['isClick'] == 1,
-                       'mlogViewTime'] = df.loc[df['isClick'] == 1,
-                                                'mlogViewTime'].map(lambda t: 0.1 if pd.isna(t) else t)
-                df.loc[df['isClick'] == 1, 'mlogViewTime'] = df.loc[df['isClick'] == 1,
-                                                                    'mlogViewTime'].clip(lower=0.1)
-                # Fill `nan` in `gender` with global median
-                df["gender"] = df["gender"].map(self._convert_gender)
-                df["gender"] = df["gender"].fillna(value=gender_median)
-                # Fill `nan` in `age` with global median
-                df["age"] = df["age"].fillna(value=age_median)
-                # Check `nan` in demographic data
-                if df[["level", "province", "registeredMonthCnt", "talkId", "followCnt", "age",
-                       "gender"]].isna().any().any():
-                    bad_df_ls.append(df)
+                df.loc[df['isClick'] == 1, 'mlogViewTime'] = df.loc[df['isClick'] == 1, 'mlogViewTime'].map(
+                    lambda t: 0.1 if pd.isna(t) else t)
+                df.loc[df['isClick'] == 1, 'mlogViewTime'] = df.loc[df['isClick'] == 1, 'mlogViewTime'].clip(lower=0.1)
             if bad_content_id_df_ls:
                 logging.info(f"{user}'s session data dropped")
                 continue
@@ -192,10 +163,10 @@ class DataProcessUtils:
     def _encode_data(session_data: Dict[str, List[Tuple[int, pd.DataFrame]]],
                      encoder_save_path: str,
                      encoded_obs_attrs_name: Tuple[str] = ("songId", "artistId", "creatorId", "talkId", "contentId_1",
-                                                           "contentId_2", "contentId_3"),
-                     encoded_demographics_info_name: Tuple[str] = ("province", )):
+                                                           "contentId_2", "contentId_3")):
         concat_data = [pd.concat([df[1] for df in df_list], ignore_index=True) for df_list in session_data.values()]
         concat_data = pd.concat(concat_data, ignore_index=True)
+        concat_data = concat_data[concat_data["isClick"] == 1]
         label_encoders = {}
         for attr in encoded_obs_attrs_name:
             le = LabelEncoder()
@@ -204,114 +175,61 @@ class DataProcessUtils:
             with open(f"{encoder_save_path}/LabelEncoder of {attr}.pkl", "wb") as f:
                 pickle.dump(le, f)
             logging.info(f"{attr} encoder saved to {encoder_save_path}/LabelEncoder of {attr}.pkl")
-        for info in encoded_demographics_info_name:
-            le = LabelEncoder()
-            le.fit(concat_data[info].values)
-            label_encoders[info] = le
-            with open(f"{encoder_save_path}/LabelEncoder of {info}.pkl", "wb") as f:
-                pickle.dump(le, f)
-            logging.info(f"{info} encoder saved to {encoder_save_path}/LabelEncoder of {info}.pkl")
-        max_b_cards_num = concat_data["browsedCardsNum"].max()
         max_c_cards_num = concat_data["clickedCardsNum"].max()
-        return max_b_cards_num, max_c_cards_num, label_encoders
+        return max_c_cards_num, label_encoders
 
     @staticmethod
     def _convert_to_tensor(session_data: Dict[str, List[Tuple[int, pd.DataFrame]]],
                            label_encoders: Dict[str, LabelEncoder],
-                           max_b_cards_num,
                            max_c_cards_num,
                            encoded_obs_attrs_name: Tuple[str] = ("songId", "artistId", "creatorId", "talkId",
                                                                  "contentId_1", "contentId_2", "contentId_3"),
-                           demographics_info_name: Tuple[str] = ("province", "registeredMonthCnt", "level",
-                                                                 "followCnt", "gender", "age"),
                            save_converted_tensors=False,
                            save_converted_tensors_path: str = None):
         logging.info("Converting to tensors")
-        obs_attrs_b = {}
-        obs_attrs_c = {}
-        demos_info = {}
-        b_cards_num = []
-        c_cards_num = []
-        watching_duration = []
-        session_lengths = []
-        activity_index = []
-        session_interval = []
+        obs_attrs_c = {}  # needed
+        c_cards_num = []  # needed
+        watching_duration = []  # needed
+        session_lengths = []  # needed
+        activity_index = []  # needed
         user_num = len(session_data.keys())
 
         for ind, attr in enumerate(encoded_obs_attrs_name):
             logging.info(f"Converting attribute {ind + 1}/{len(encoded_obs_attrs_name)}...")
-            obs_attrs_b[attr] = []
             obs_attrs_c[attr] = []
             for user, df_tuple_list in tqdm(session_data.items()):
-                user_attr_tensors_b, user_attr_tensors_c = [], []
+                user_attr_tensors_c = []
                 session_lengths_len = len(session_lengths)
                 if session_lengths_len < user_num:
                     session_lengths.append(len(df_tuple_list))
                 for _, df in df_tuple_list:
-                    df[attr] = label_encoders[attr].transform(df[attr].values)
-                    user_attr_tensors_b.append(torch.from_numpy(df.loc[df["isClick"] == 0, attr].values.astype(int)))
-                    user_attr_tensors_c.append(torch.from_numpy(df.loc[df["isClick"] == 1, attr].values.astype(int)))
-                obs_attrs_b[attr].append(user_attr_tensors_b)
+                    transformed_attr = label_encoders[attr].transform(df.loc[df["isClick"] == 1, attr].values)
+                    user_attr_tensors_c.append(torch.from_numpy(transformed_attr.astype(int)))
                 obs_attrs_c[attr].append(user_attr_tensors_c)
 
-        for ind, info in enumerate(demographics_info_name):
-            logging.info(f"Converting info {ind + 1}/{len(demographics_info_name)}...")
-            demos_info[info] = []
-            for user, df_tuple_list in tqdm(session_data.items()):
-                for _, df in df_tuple_list:
-                    if info == "province":
-                        df[info] = label_encoders[info].transform(df[info].values)
-                    user_info_tensors = torch.from_numpy(np.unique(df[info].values.astype(float)))
-                    demos_info[info].append(user_info_tensors)
-                    break
-
-        logging.info("Converting activity index and session interval...")
+        logging.info("Converting activity index...")
         for user, df_tuple_list in tqdm(session_data.items()):
             user_activity_index_tensors = []
-            session_interval_tensors = []
             for _, df in df_tuple_list:
                 user_activity_index_tensors.append(
                     torch.from_numpy(np.unique(df["activityIndex"].values.astype(float))))
-                session_interval_tensors.append(
-                    torch.from_numpy(np.unique(df["sessionInterval"].values.astype(float))))
             activity_index.append(user_activity_index_tensors)
-            session_interval.append(session_interval_tensors)
 
         duration_bar = tqdm(session_data.items())
         for user, df_tuple_list in duration_bar:
             duration_bar.set_description("Converting watching duration")
-            user_b_cards_num = []
             user_c_cards_num = []
             user_duration_tensors = []
             for _, df in df_tuple_list:
                 user_duration_tensors.append(
                     torch.from_numpy(df.loc[df["isClick"] == 1, "mlogViewTime"].values.astype(float)))
-                user_b_cards_num.append(torch.from_numpy(np.unique(df["browsedCardsNum"].values.astype(int))))
                 user_c_cards_num.append(torch.from_numpy(np.unique(df["clickedCardsNum"].values.astype(int))))
             watching_duration.append(user_duration_tensors)
-            b_cards_num.append(user_b_cards_num)
             c_cards_num.append(user_c_cards_num)
         session_lengths = torch.tensor(session_lengths)
 
         # reshape tensors
-        obs_attrs_b_bar = tqdm(obs_attrs_b.items())
-        obs_attrs_b_tensor = {}
         obs_attrs_c_tensor = {}
-        for attr_name, attr_value in obs_attrs_b_bar:
-            obs_attrs_b_bar.set_description("Reshaping obs attrs browsed")
-            users_session_attr_b = []
-            for each_user_session_attrs in attr_value:
-                # pad 1-d b_cards_num to max_b_cards_num first
-                pad_attrs = [
-                    nn_func.pad(tensor_, (0, max_b_cards_num - tensor_.shape[0]), value=0, mode="constant")
-                    for tensor_ in each_user_session_attrs
-                ]
-                pad_attrs_tensor = torch.stack(pad_attrs)  # (T_i, max_b_N)
-                users_session_attr_b.append(pad_attrs_tensor)
-            users_session_attr_tensor = pad_sequence(users_session_attr_b, padding_value=0,
-                                                     batch_first=True)  # (I, max_T, max_b_N)
-            obs_attrs_b_tensor[attr_name] = users_session_attr_tensor
-
         obs_attrs_c_bar = tqdm(obs_attrs_c.items())
         for attr_name, attr_value in obs_attrs_c_bar:
             obs_attrs_c_bar.set_description("Reshaping obs attrs clicked")
@@ -341,33 +259,19 @@ class DataProcessUtils:
             pad_duration_tensor_list.append(pad_duration_tensor)
         pad_user_duration_tensor = pad_sequence(pad_duration_tensor_list, batch_first=True, padding_value=0.5).float()
 
-        logging.info("Reshaping session cards num, activity index and session interval...")
-        b_cards_num_stack = [torch.cat(_) for _ in b_cards_num]
-        b_cards_num_stack_pad = pad_sequence(b_cards_num_stack, padding_value=1, batch_first=True)  # (I, max_T)
+        logging.info("Reshaping session cards num, activity index...")
         c_cards_num_stack = [torch.cat(_) for _ in c_cards_num]
         c_cards_num_stack_pad = pad_sequence(c_cards_num_stack, padding_value=1, batch_first=True)  # (I, max_T)
         activity_index_stack = [torch.cat(_) for _ in activity_index]
         activity_index_stack_pad = pad_sequence(activity_index_stack, padding_value=0, batch_first=True)  # (I, max_T)
-        session_interval_stack = [torch.cat(_) for _ in session_interval]
-        session_interval_stack_pad = pad_sequence(session_interval_stack, padding_value=0,
-                                                  batch_first=True)  # (I, max_T)
 
-        demos_info_cat = {k: torch.cat(v) for k, v in demos_info.items()}
         if save_converted_tensors and save_converted_tensors_path:
-            torch.save(obs_attrs_b_tensor, f"{save_converted_tensors_path}/obs attributes browsed.pt")
             torch.save(obs_attrs_c_tensor, f"{save_converted_tensors_path}/obs attributes clicked.pt")
             torch.save(pad_user_duration_tensor, f"{save_converted_tensors_path}/duration.pt")
-            torch.save(b_cards_num_stack_pad, f"{save_converted_tensors_path}/browsed cards num.pt")
             torch.save(c_cards_num_stack_pad, f"{save_converted_tensors_path}/clicked cards num.pt")
             torch.save(activity_index_stack_pad, f"{save_converted_tensors_path}/activity index.pt")
-            torch.save(session_interval_stack_pad, f"{save_converted_tensors_path}/session interval.pt")
             torch.save(session_lengths, f"{save_converted_tensors_path}/session length.pt")
-            torch.save(demos_info_cat, f"{save_converted_tensors_path}/demo info of users.pt")
             logging.info(f"All converted tensors are saved to {save_converted_tensors_path}")
-        else:
-            return obs_attrs_b_tensor, obs_attrs_c_tensor, pad_user_duration_tensor, b_cards_num_stack_pad, \
-                c_cards_num_stack_pad, activity_index_stack_pad, session_interval_stack_pad, session_lengths, \
-                demos_info_cat
 
     def _split_list_to_chunk(self, ls: List):
         chunk_size = (len(ls) + self._chunk_num - 1) // self._chunk_num
@@ -384,20 +288,18 @@ class DataProcessUtils:
             session_data = pickle.load(f)
         return session_data
 
-    def _data_process(self):
+    def _add_aux_columns(self):
         # Collect all users sessions data to `self._user_session_data`
-        logging.info("Collecting all users(or chunk users data if in chunk) sessions data...")
+        logging.info("Gathering all users sessions data...")
         split_impression_data = self._data.groupby("userId").apply(
             lambda x: self._split_session(df=x, group_key="impressTimeFormatted"))
         self._user_session_data = {}
-        user_session_bar = tqdm(split_impression_data.index)
-        for ind in user_session_bar:
-            user_session_bar.set_description("Collecting")
+        for ind in tqdm(split_impression_data.index):
             self._user_session_data[ind] = []
             for df in split_impression_data[ind]:
                 self._user_session_data[ind].append(df)
 
-        # Add an auxiliary column `sessionLength` to `self._data`
+        # Add an auxiliary column `sessionLength`
         logging.info("Adding column `sessionLength`...")
         user_session_length = {"userId": [], "sessionLength": []}
         for user, session_list in self._user_session_data.items():
@@ -406,57 +308,39 @@ class DataProcessUtils:
         user_session_length = pd.DataFrame(user_session_length)
         self._data = self._data.merge(user_session_length, on="userId")
 
-        # Add auxiliary columns `browsedCardsNum`, `clickedCardsNum` to session df_tuple in `self._user_session_data`
-        logging.info("Adding auxiliary columns `browsedCardsNum`, `clickedCardsNum`...")
-        cards_count_bar = tqdm(self._user_session_data.items())
+        # Add auxiliary columns `clickedCardsNum`
+        logging.info("Adding auxiliary columns `clickedCardsNum`...")
         user_cards_num = {
             "userId": [],
-            "maxBrowsedCardsNum": [],
             "maxClickedCardsNum": [],
-            "minBrowsedCardsNum": [],
             "minClickedCardsNum": []
         }
-        for user, session_list in cards_count_bar:
-            cards_count_bar.set_description("Adding")
-            browsed_cards_nums, clicked_cards_nums = [], []
-            for grp_tuple in session_list:
-                df = grp_tuple[1]
-                browsed_cards_num = len(df[df["isClick"] == 0])
+        for user, session_list in tqdm(self._user_session_data.items()):
+            clicked_cards_nums = []
+            for _, df in session_list:
                 clicked_cards_num = len(df[df["isClick"] == 1])
-                df["browsedCardsNum"] = browsed_cards_num
                 df["clickedCardsNum"] = clicked_cards_num
-                browsed_cards_nums.append(browsed_cards_num)
                 clicked_cards_nums.append(clicked_cards_num)
-            max_browsed_cards_num = max(browsed_cards_nums)
             max_clicked_cards_num = max(clicked_cards_nums)
-            min_browsed_cards_num = min(browsed_cards_nums)
             min_clicked_cards_num = min(clicked_cards_nums)
             user_cards_num["userId"].append(user)
-            user_cards_num["maxBrowsedCardsNum"].append(max_browsed_cards_num)
             user_cards_num["maxClickedCardsNum"].append(max_clicked_cards_num)
-            user_cards_num["minBrowsedCardsNum"].append(min_browsed_cards_num)
             user_cards_num["minClickedCardsNum"].append(min_clicked_cards_num)
         user_cards_num = pd.DataFrame(user_cards_num)
 
-        # Add `maxBrowsedCardsNum`, `maxClickedCardsNum`, `minBrowsedCardsNum`, `minClickedCardsNum` to `self._data`
-        logging.info("Adding auxiliary columns `maxBrowsedCardsNum`, `maxClickedCardsNum`, "
-                     "`minBrowsedCardsNum`, `minClickedCardsNum`...")
+        # Add `maxClickedCardsNum`, `minClickedCardsNum`
+        logging.info("Adding auxiliary columns `maxClickedCardsNum`, `minClickedCardsNum`...")
         self._data = self._data.merge(user_cards_num, on="userId")
 
     def _filter_data(self,
                      session_range: Tuple[int, int],
-                     b_range: Tuple[int, int],
-                     c_range: Tuple[int, int],
-                     just_save_clicked_data=False,
-                     min_clicked_session_num=1):
+                     min_max_clicked_cards_num: int,
+                     min_clicked_session_length=1):
         """
-        Choose `sessionLength >= session_range[0] & sessionLength <= session_range[1]` in `self._data` and
-        `self._user_session_data`
 
         :param session_range:
-        :param b_range:
-        :param c_range:
-        :param just_save_clicked_data:
+        :param min_max_clicked_cards_num:
+        :param min_clicked_session_length:
         :return:
         """
         logging.info("Filtering suitable data via `sessionLength`...")
@@ -464,36 +348,28 @@ class DataProcessUtils:
                                          & (self._data["sessionLength"] <= session_range[1])]
         filtered_unique_user = self._filtered_data["userId"].unique()
         self._filtered_session_data = {k: v for k, v in self._user_session_data.items() if k in filtered_unique_user}
-        # Choose `maxBrowsedCardsNum <= b_range[1] & maxClickedCardsNum <= c_range[1] & minBrowsedCardsNum >= b_range[0]
-        # & minClickedCardsNum >= c_range[0]`
-        # in `self._data` and `self._user_session_data`
-        logging.info("Filtering suitable data via `maxBrowsedCardsNum`, `maxClickedCardsNum`, "
-                     "`minBrowsedCardsNum`, `minClickedCardsNum`...")
-        if just_save_clicked_data:
-            self._filtered_data = self._filtered_data[(self._filtered_data["maxClickedCardsNum"] <= c_range[1])
-                                                      & (self._filtered_data["minClickedCardsNum"] >= c_range[0])]
-        else:
-            self._filtered_data = self._filtered_data[(self._filtered_data["maxBrowsedCardsNum"] <= b_range[1])
-                                                      & (self._filtered_data["maxClickedCardsNum"] <= c_range[1]) &
-                                                      (self._filtered_data["minBrowsedCardsNum"] >= b_range[0]) &
-                                                      (self._filtered_data["minClickedCardsNum"] >= c_range[0])]
+        logging.info("Filtering suitable data via `maxClickedCardsNum`...")
+        self._filtered_data = self._filtered_data[
+            (self._filtered_data["maxClickedCardsNum"] >= min_max_clicked_cards_num)]
         filtered_unique_user = self._filtered_data["userId"].unique()
         self._filtered_session_data = {
             k: v
             for k, v in self._filtered_session_data.items() if k in filtered_unique_user
         }
-        # if `just_save_clicked_data` is `True`, we just retain the sessions with clicking behaviors.
-        if just_save_clicked_data:
-            logging.info("Identifying sessions with clicking behaviors...")
-            self._filtered_session_data = {
-                k: self._retain_clicked_behavior_session_in_sessions(v)
-                for k, v in self._filtered_session_data.items()
-            }
-            self._filtered_session_data = {
-                k: v
-                for k, v in self._filtered_session_data.items() if v is not None and len(v) >= min_clicked_session_num
-            }
-            logging.info(f"Number of users with clicking behaviors: {len(self._filtered_session_data)}")
+        # We just reserve the sessions with clicking behaviors.
+        logging.info("Identifying sessions with clicking behaviors...")
+        self._filtered_session_data = {
+            k: self._reserve_clicked_behavior_session_in_sessions(v)
+            for k, v in self._filtered_session_data.items()
+        }
+        self._filtered_session_data = {
+            k: v
+            for k, v in self._filtered_session_data.items() if v is not None and len(v) >= min_clicked_session_length
+        }
+        logging.info(
+            f"Number of users with clicking behavior session "
+            f"whose length is greater than {min_clicked_session_length}: "
+            f"{len(self._filtered_session_data)}")
 
     def _skip_process_and_convert_to_tensor(self,
                                             save_dir: str,
@@ -513,20 +389,18 @@ class DataProcessUtils:
                                                                          subsample_seed=subsample_seed,
                                                                          save_subsample_data=save_subsample_data)
         session_data = self._add_user_activity_index(session_data)
-        session_data = self._add_session_interval(session_data)
-        non_nan_filtered_session_data = self._fill_nan(session_data, full_data)
+        non_nan_filtered_session_data = self._fill_nan(session_data)
         results_save_path = self._set_results_save_path(save_dir=save_dir,
                                                         subsample_size=subsample_size,
                                                         subsample_seed=subsample_seed)
         if not os.path.exists(results_save_path):
             os.makedirs(results_save_path)
-        max_b_cards_num, max_c_cards_num, label_encoders = self._encode_data(
+        max_c_cards_num, label_encoders = self._encode_data(
             session_data=non_nan_filtered_session_data,
-            encoder_save_path=results_save_path,
+            encoder_save_path=results_save_path
         )
         self._convert_to_tensor(session_data=non_nan_filtered_session_data,
                                 label_encoders=label_encoders,
-                                max_b_cards_num=max_b_cards_num,
                                 max_c_cards_num=max_c_cards_num,
                                 save_converted_tensors=save_converted_tensors,
                                 save_converted_tensors_path=results_save_path)
@@ -574,11 +448,9 @@ class DataProcessUtils:
                            sorted_data_path: str,
                            ranges_pickle_path: str,
                            session_length_range: Tuple[int, int] = None,
-                           browsed_cards_range: Tuple[int, int] = None,
-                           clicked_cards_range: Tuple[int, int] = None,
+                           min_max_clicked_cards_num: int = None,
                            just_save_data=False,
                            just_save_ranges=False,
-                           just_save_clicked_data=False,
                            min_clicked_session_num: int = 1,
                            save_full_and_session_data=False,
                            save_converted_tensors=False,
@@ -593,12 +465,11 @@ class DataProcessUtils:
          `userId` will not be divided to different chunks.
         :param ranges_pickle_path: The session_data_path to the pickle file of user range data
         :param sorted_data_path: The session_data_path to the sorted_data
-        :param clicked_cards_range:
-        :param browsed_cards_range:
         :param session_length_range:
+        :param min_max_clicked_cards_num:
         :param just_save_data:
         :param just_save_ranges:
-        :param just_save_clicked_data:
+        :param min_clicked_session_num:
         :param save_full_and_session_data:
         :param save_converted_tensors:
         :param session_data_pkl_path:
@@ -609,14 +480,10 @@ class DataProcessUtils:
         :param save_subsample_data:
         :return:
         """
-        if just_save_clicked_data:
-            logging.info("Just retain clicked behavior data...")
-            save_dir = f"./session {session_length_range[0]}-{session_length_range[1]} " \
-                       f"clicked cards num {clicked_cards_range[0]}-{clicked_cards_range[1]}"
-        else:
-            save_dir = f"./session {session_length_range[0]}-{session_length_range[1]} " \
-                       f"browsed cards num {browsed_cards_range[0]}-{browsed_cards_range[1]} clicked cards num " \
-                       f"{clicked_cards_range[0]}-{clicked_cards_range[1]}"
+        logging.info("Just reserve clicked behavior data...")
+        save_dir = f"./session {session_length_range[0]}-{session_length_range[1]} " \
+                   f"min clicked cards num {min_max_clicked_cards_num} min clicked " \
+                   f"session num {min_clicked_session_num}"
         if use_session_data_pkl and session_data_pkl_path:
             logging.info(f"Using saved session data {session_data_pkl_path}, skip processing steps...")
             self._skip_process_and_convert_to_tensor(session_data_pkl_path=session_data_pkl_path,
@@ -668,12 +535,10 @@ class DataProcessUtils:
                                            names=self._columns)
             batch_users_data["impressTimeFormatted"] = batch_users_data["impressTimeFormatted"].map(pd.to_datetime)
             self._reset_data(new_data=batch_users_data)
-            self._data_process()
+            self._add_aux_columns()
             self._filter_data(session_range=session_length_range,
-                              b_range=browsed_cards_range,
-                              c_range=clicked_cards_range,
-                              just_save_clicked_data=just_save_clicked_data,
-                              min_clicked_session_num=min_clicked_session_num)
+                              min_max_clicked_cards_num=min_max_clicked_cards_num,
+                              min_clicked_session_length=min_clicked_session_num)
             filtered_full_data.append(self._filtered_data)
             filtered_session_data.append(self._filtered_session_data)
         filtered_full_data = pd.concat(filtered_full_data, ignore_index=True)
@@ -698,16 +563,14 @@ class DataProcessUtils:
 
         # continue to converting to tensor
         filtered_session_data = self._add_user_activity_index(filtered_session_data)
-        filtered_session_data = self._add_session_interval(filtered_session_data)
-        non_nan_filtered_session_data = self._fill_nan(filtered_session_data, filtered_full_data)
+        non_nan_filtered_session_data = self._fill_nan(filtered_session_data)
         results_save_path = self._set_results_save_path(save_dir, subsample_seed, subsample_size)
-        max_b_cards_num, max_c_cards_num, label_encoders = self._encode_data(
+        max_c_cards_num, label_encoders = self._encode_data(
             session_data=non_nan_filtered_session_data,
-            encoder_save_path=results_save_path,
+            encoder_save_path=results_save_path
         )
         self._convert_to_tensor(session_data=non_nan_filtered_session_data,
                                 label_encoders=label_encoders,
-                                max_b_cards_num=max_b_cards_num,
                                 max_c_cards_num=max_c_cards_num,
                                 save_converted_tensors=save_converted_tensors,
                                 save_converted_tensors_path=results_save_path)
