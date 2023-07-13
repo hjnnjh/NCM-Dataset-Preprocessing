@@ -20,7 +20,6 @@ def main(chunk_num: int,
          min_max_clicked_cards_num: int = None,
          load_existing_pkl=False,
          existing_pkl_path: str = None,
-         full_data_path: str = None,
          save_full_and_session_data: bool = False,
          save_converted_tensors: bool = False,
          subsample_size: int = None,
@@ -41,7 +40,6 @@ def main(chunk_num: int,
                            min_max_clicked_cards_num=min_max_clicked_cards_num,
                            use_session_data_pkl=load_existing_pkl,
                            session_data_pkl_path=existing_pkl_path,
-                           full_data_path=full_data_path,
                            save_full_and_session_data=save_full_and_session_data,
                            save_converted_tensors=save_converted_tensors,
                            subsample_size=subsample_size,
@@ -52,20 +50,18 @@ def main(chunk_num: int,
 
 if __name__ == "__main__":
     chunk_num = 50
-    sessionLengthRange = (10, 50)
+    session_length_range = (10, 50)
     # browsed_cards_range = (3, 999)
-    minMaxClickedNum = 3
+    min_max_clicked_num = 3
     main(
         chunk_num=chunk_num,
-        session_length_range=sessionLengthRange,
+        session_length_range=session_length_range,
         # load_existing_pkl=True,
-        # existing_pkl_path="session 3-999 clicked cards num 0-999/source data/session data.pkl",
-        # full_data_path="session 3-999 clicked cards num 0-999/source data/full data.csv",
         save_full_and_session_data=True,
         save_converted_tensors=True,
         subsample_size=5000,
         subsample_seed=712,
         save_subsample_data=True,
-        min_max_clicked_cards_num=minMaxClickedNum,
+        min_max_clicked_cards_num=min_max_clicked_num,
         min_clicked_session_num=3)
     # main(chunk_num, session_length_range, browsed_cards_range, clicked_cards_range)

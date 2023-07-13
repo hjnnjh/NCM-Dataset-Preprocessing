@@ -35,7 +35,7 @@ class DataProcessUtils:
         self._filtered_session_data = None
 
     @staticmethod
-    def _split_session(df: pd.DataFrame, group_key):
+    def _split_to_sessions(df: pd.DataFrame, group_key):
         df = df.sort_values(by=group_key, ascending=True)
         # Calculate the time interval between each sample and the previous sample
         time_diff = df[group_key].diff().fillna(pd.Timedelta(seconds=3600))
@@ -79,6 +79,12 @@ class DataProcessUtils:
                 time_delta = df["impressTimeFormatted"].iloc[-1] - df["impressTimeFormatted"].iloc[0]
                 df["activityIndex"] = time_delta.total_seconds()
         return session_data
+    
+    @staticmethod
+    def _delete_unbalanced_feature(data: pd.DataFrame):
+        logging.info("Deleting unbalanced feature in `songId` and `artistId` named `AFBHAHLH`...")
+        data = data[(data["songId"] != "AFBHAHLH") & (data["artistId"] != "AFBHAHLH")]
+        return data
 
     @staticmethod
     def _is_clicked_behavior_in_this_session_dataframe(each_tuple_in_sessions_list: Tuple[int, pd.DataFrame]):
@@ -131,9 +137,11 @@ class DataProcessUtils:
                 df["talkId"] = df["talkId"].fillna(value="-1")
                 df["talkId"] = df["talkId"].map(lambda x: str(int(x)))
                 # Make sure `mlogViewTime` > 0 when `isClick` == 1, set the `nan` to 0.1
-                df.loc[df['isClick'] == 1, 'mlogViewTime'] = df.loc[df['isClick'] == 1, 'mlogViewTime'].map(
-                    lambda t: 0.1 if pd.isna(t) else t)
-                df.loc[df['isClick'] == 1, 'mlogViewTime'] = df.loc[df['isClick'] == 1, 'mlogViewTime'].clip(lower=0.1)
+                df.loc[df['isClick'] == 1,
+                       'mlogViewTime'] = df.loc[df['isClick'] == 1,
+                                                'mlogViewTime'].map(lambda t: 0.1 if pd.isna(t) else t)
+                df.loc[df['isClick'] == 1, 'mlogViewTime'] = df.loc[df['isClick'] == 1,
+                                                                    'mlogViewTime'].clip(lower=0.1)
             if bad_content_id_df_ls:
                 logging.info(f"{user}'s session data dropped")
                 continue
@@ -292,7 +300,7 @@ class DataProcessUtils:
         # Collect all users sessions data to `self._user_session_data`
         logging.info("Gathering all users sessions data...")
         split_impression_data = self._data.groupby("userId").apply(
-            lambda x: self._split_session(df=x, group_key="impressTimeFormatted"))
+            lambda x: self._split_to_sessions(df=x, group_key="impressTimeFormatted"))
         self._user_session_data = {}
         for ind in tqdm(split_impression_data.index):
             self._user_session_data[ind] = []
@@ -310,11 +318,7 @@ class DataProcessUtils:
 
         # Add auxiliary columns `clickedCardsNum`
         logging.info("Adding auxiliary columns `clickedCardsNum`...")
-        user_cards_num = {
-            "userId": [],
-            "maxClickedCardsNum": [],
-            "minClickedCardsNum": []
-        }
+        user_cards_num = {"userId": [], "maxClickedCardsNum": [], "minClickedCardsNum": []}
         for user, session_list in tqdm(self._user_session_data.items()):
             clicked_cards_nums = []
             for _, df in session_list:
@@ -349,8 +353,8 @@ class DataProcessUtils:
         filtered_unique_user = self._filtered_data["userId"].unique()
         self._filtered_session_data = {k: v for k, v in self._user_session_data.items() if k in filtered_unique_user}
         logging.info("Filtering suitable data via `maxClickedCardsNum`...")
-        self._filtered_data = self._filtered_data[
-            (self._filtered_data["maxClickedCardsNum"] >= min_max_clicked_cards_num)]
+        self._filtered_data = self._filtered_data[(self._filtered_data["maxClickedCardsNum"] >=
+                                                   min_max_clicked_cards_num)]
         filtered_unique_user = self._filtered_data["userId"].unique()
         self._filtered_session_data = {
             k: v
@@ -366,22 +370,19 @@ class DataProcessUtils:
             k: v
             for k, v in self._filtered_session_data.items() if v is not None and len(v) >= min_clicked_session_length
         }
-        logging.info(
-            f"Number of users with clicking behavior session "
-            f"whose length is greater than {min_clicked_session_length}: "
-            f"{len(self._filtered_session_data)}")
+        logging.info(f"Number of users with clicking behavior session "
+                     f"whose length is greater than {min_clicked_session_length}: "
+                     f"{len(self._filtered_session_data)}")
 
     def _skip_process_and_convert_to_tensor(self,
                                             save_dir: str,
                                             session_data_pkl_path: str = None,
-                                            full_data_path: str = None,
                                             save_converted_tensors=False,
                                             subsample_size: int = None,
                                             subsample_seed: int = None,
                                             save_subsample_data=False):
         # continue to converting to tensor
         session_data = self._load_session_data(session_data_pkl_path)
-        full_data = pd.read_csv(full_data_path, encoding="utf-8")
         if subsample_size:
             session_data = self._subsample_session_data_and_post_process(filtered_session_data=session_data,
                                                                          save_dir=save_dir,
@@ -395,10 +396,8 @@ class DataProcessUtils:
                                                         subsample_seed=subsample_seed)
         if not os.path.exists(results_save_path):
             os.makedirs(results_save_path)
-        max_c_cards_num, label_encoders = self._encode_data(
-            session_data=non_nan_filtered_session_data,
-            encoder_save_path=results_save_path
-        )
+        max_c_cards_num, label_encoders = self._encode_data(session_data=non_nan_filtered_session_data,
+                                                            encoder_save_path=results_save_path)
         self._convert_to_tensor(session_data=non_nan_filtered_session_data,
                                 label_encoders=label_encoders,
                                 max_c_cards_num=max_c_cards_num,
@@ -456,7 +455,6 @@ class DataProcessUtils:
                            save_converted_tensors=False,
                            use_session_data_pkl=False,
                            session_data_pkl_path: str = None,
-                           full_data_path: str = None,
                            subsample_size: int = None,
                            subsample_seed: int = None,
                            save_subsample_data=False):
@@ -474,7 +472,6 @@ class DataProcessUtils:
         :param save_converted_tensors:
         :param session_data_pkl_path:
         :param use_session_data_pkl:
-        :param full_data_path:
         :param subsample_size:
         :param subsample_seed:
         :param save_subsample_data:
@@ -487,7 +484,6 @@ class DataProcessUtils:
         if use_session_data_pkl and session_data_pkl_path:
             logging.info(f"Using saved session data {session_data_pkl_path}, skip processing steps...")
             self._skip_process_and_convert_to_tensor(session_data_pkl_path=session_data_pkl_path,
-                                                     full_data_path=full_data_path,
                                                      save_dir=save_dir,
                                                      save_converted_tensors=save_converted_tensors,
                                                      subsample_size=subsample_size,
@@ -534,6 +530,7 @@ class DataProcessUtils:
                                            header=None,
                                            names=self._columns)
             batch_users_data["impressTimeFormatted"] = batch_users_data["impressTimeFormatted"].map(pd.to_datetime)
+            batch_users_data = self._delete_unbalanced_feature(batch_users_data)
             self._reset_data(new_data=batch_users_data)
             self._add_aux_columns()
             self._filter_data(session_range=session_length_range,
@@ -565,10 +562,8 @@ class DataProcessUtils:
         filtered_session_data = self._add_user_activity_index(filtered_session_data)
         non_nan_filtered_session_data = self._fill_nan(filtered_session_data)
         results_save_path = self._set_results_save_path(save_dir, subsample_seed, subsample_size)
-        max_c_cards_num, label_encoders = self._encode_data(
-            session_data=non_nan_filtered_session_data,
-            encoder_save_path=results_save_path
-        )
+        max_c_cards_num, label_encoders = self._encode_data(session_data=non_nan_filtered_session_data,
+                                                            encoder_save_path=results_save_path)
         self._convert_to_tensor(session_data=non_nan_filtered_session_data,
                                 label_encoders=label_encoders,
                                 max_c_cards_num=max_c_cards_num,
