@@ -63,12 +63,11 @@ class DataProcessUtils:
     def _convert_gender(gender):
         if gender == "male":
             return 0
-        elif gender == "female":
+        if gender == "female":
             return 1
-        elif gender == "unknown":
+        if gender == "unknown":
             return np.nan
-        else:
-            return gender
+        return gender
 
     @staticmethod
     def _add_user_activity_index(session_data: Dict[str, List[Tuple[int, pd.DataFrame]]]):
@@ -243,7 +242,7 @@ class DataProcessUtils:
             obs_attrs_c_bar.set_description("Reshaping obs attrs clicked")
             users_session_attr_c = []
             for each_user_session_attrs in attr_value:
-                # pad 1-d b_cards_num to max_b_cards_num first
+                # pad 1-d b_cards_num to max_c_cards_num first
                 pad_attrs = [
                     nn_func.pad(tensor_, (0, max_c_cards_num - tensor_.shape[0]), value=0, mode="constant")
                     for tensor_ in each_user_session_attrs
