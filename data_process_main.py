@@ -49,19 +49,15 @@ def main(chunk_num: int,
 
 
 if __name__ == "__main__":
-    chunk_num = 50
-    session_length_range = (10, 50)
-    # browsed_cards_range = (3, 999)
-    min_max_clicked_num = 3
     main(
-        chunk_num=chunk_num,
-        session_length_range=session_length_range,
+        chunk_num=50,
+        session_length_range=(10, 999),
         # load_existing_pkl=True,
         save_full_and_session_data=True,
         save_converted_tensors=True,
         subsample_size=5000,
-        subsample_seed=712,
+        subsample_seed=904,
         save_subsample_data=True,
-        min_max_clicked_cards_num=min_max_clicked_num,
-        min_clicked_session_num=3)
+        min_max_clicked_cards_num=5,
+        min_clicked_session_num=10)
     # main(chunk_num, session_length_range, browsed_cards_range, clicked_cards_range)

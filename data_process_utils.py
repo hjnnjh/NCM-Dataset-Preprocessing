@@ -81,8 +81,12 @@ class DataProcessUtils:
     
     @staticmethod
     def _delete_unbalanced_feature(data: pd.DataFrame):
-        logging.info("Deleting unbalanced feature in `songId` and `artistId` named `AFBHAHLH`...")
-        data = data[(data["songId"] != "AFBHAHLH") & (data["artistId"] != "AFBHAHLH")]
+        logging.info("Deleting unbalanced feature in `songId`, `artistId` and `talkId`")
+        most_freq_song_id = data["songId"].value_counts().index[0]
+        most_freq_artist_id = data["artistId"].value_counts().index[0]
+        most_freq_talk_id = data["talkId"].value_counts().index[0]
+        data = data[(data["songId"] != most_freq_song_id) & (data["artistId"] != most_freq_artist_id)
+                    & (data["talkId"] != most_freq_talk_id)]
         return data
 
     @staticmethod
@@ -116,9 +120,7 @@ class DataProcessUtils:
     def _fill_nan(session_data: Dict[str, List[Tuple[int, pd.DataFrame]]] = None):
         logging.info("Checking `nan` in dataset and fill it...")
         new_filtered_session_data = {}  # Dict[int, Tuple[int, pd.Dataframe]]
-        bad_df_ls = []
         for user, df_tuple_list in tqdm(session_data.items()):
-            bad_content_id_df_ls = []
             for session_num, df in df_tuple_list:
                 assert isinstance(df, pd.DataFrame)
                 # Add `session_number`
@@ -127,11 +129,12 @@ class DataProcessUtils:
                 df.sort_values(by=["impressTimeFormatted"], inplace=True)
                 # Fill `nan` randomly using the last or next value
                 df["contentId"] = df["contentId"].fillna(value="-1,-1,-1")
+                split_content_id_columns = ["contentId_1", "contentId_2", "contentId_3"]
                 try:
-                    df[['contentId_1', 'contentId_2', 'contentId_3']] = df["contentId"].str.split(",", expand=True)
-                except Exception as exception:
-                    logging.warning(exception)
-                    bad_content_id_df_ls.append(df)
+                    split_content_id_result = df["contentId"].str.split(",", expand=True)
+                    df[split_content_id_columns] = split_content_id_result
+                except ValueError as e:
+                    logging.error(f"Error in filling `nan`: {e}")
                 # Fill `-1` in `talkId`
                 df["talkId"] = df["talkId"].fillna(value="-1")
                 df["talkId"] = df["talkId"].map(lambda x: str(int(x)))
@@ -141,16 +144,8 @@ class DataProcessUtils:
                                                 'mlogViewTime'].map(lambda t: 0.1 if pd.isna(t) else t)
                 df.loc[df['isClick'] == 1, 'mlogViewTime'] = df.loc[df['isClick'] == 1,
                                                                     'mlogViewTime'].clip(lower=0.1)
-            if bad_content_id_df_ls:
-                logging.info(f"{user}'s session data dropped")
-                continue
             new_filtered_session_data[user] = df_tuple_list
-        if not bad_df_ls:
-            logging.info("`nan` test passed!")
-            return new_filtered_session_data
-        else:
-            logging.info("\n")
-            raise ValueError("Still have `nan` value in dataset!")
+        return new_filtered_session_data
 
     @staticmethod
     def _subsample_session_data(session_data: Dict[str, List[Tuple[int, pd.DataFrame]]], subsample_size, seed=42):
