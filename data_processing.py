@@ -1,7 +1,7 @@
 #!/usr/bin/env python
 # -*- encoding: utf-8 -*-
 """
-@File    :   data_process_utils.py
+@File    :   data_processing.py
 @Time    :   2023/5/6 14:02
 @Author  :   Jinnan Huang 
 @Contact :   jinnan_huang@stu.xjtu.edu.cn
@@ -11,7 +11,7 @@ import logging
 import os
 import pickle
 import random
-from typing import List, Tuple, Dict
+from typing import List, Tuple, Dict, Sequence
 
 import numpy as np
 import pandas as pd
@@ -22,28 +22,31 @@ from torch.nn.utils.rnn import pad_sequence
 from tqdm import tqdm
 
 
-class DataProcessUtils:
-    def __init__(self, columns: str, data: pd.DataFrame = None, chunk_num: int = 200):
+class DataProcessing:
+    def __init__(self, columns: Sequence[str], data: pd.DataFrame = None, num_chunks: int = 200):
         logging.basicConfig(format="[%(asctime)s %(levelname)s]: %(message)s",
                             datefmt="%Y-%m-%d %H:%M:%S",
                             level=logging.INFO)
         self._data = data
         self._columns = columns
-        self._chunk_num = chunk_num
+        self._num_chunks = num_chunks
         self._user_session_data = None
         self._filtered_data = None
         self._filtered_session_data = None
 
     @staticmethod
-    def _split_to_sessions(df: pd.DataFrame, group_key):
-        df = df.sort_values(by=group_key, ascending=True)
-        # Calculate the time interval between each sample and the previous sample
-        time_diff = df[group_key].diff().fillna(pd.Timedelta(seconds=3600))
-        # Groups are grouped according to whether the time interval is longer than 1 hour, and a new group number is
-        # generated
+    def _split_to_sessions(input_dataframe: pd.DataFrame, group_key):
+        """
+        Groups are grouped according to whether the time interval is longer than 1 hour, and a new group number is
+        generated
+        :param input_dataframe:
+        :param group_key:
+        :return:
+        """
+        input_dataframe = input_dataframe.sort_values(by=group_key)
+        time_diff = input_dataframe[group_key].diff().fillna(pd.Timedelta(seconds=3600))
         group_ids = (time_diff > pd.Timedelta(hours=1)).cumsum()
-        # Returns the DataFrame indexed by the new group number
-        return df.groupby(group_ids)
+        return input_dataframe.groupby(group_ids)
 
     @staticmethod
     def _merge_dicts(list_of_dicts):
@@ -75,10 +78,12 @@ class DataProcessUtils:
         for user, df_tuple_list in tqdm(session_data.items()):
             for _, df in df_tuple_list:
                 assert isinstance(df, pd.DataFrame)
-                time_delta = df["impressTimeFormatted"].iloc[-1] - df["impressTimeFormatted"].iloc[0]
+                time_delta = df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]
+                if df["isClick"].iloc[-1] == 1 or df["isScroll"].iloc[-1] == 1:
+                    time_delta += pd.Timedelta(seconds=df["mlogViewTime"].iloc[-1])
                 df["activityIndex"] = time_delta.total_seconds()
         return session_data
-    
+
     @staticmethod
     def _delete_unbalanced_feature(data: pd.DataFrame):
         logging.info("Deleting unbalanced feature in `songId`, `artistId` and `talkId`")
@@ -126,7 +131,7 @@ class DataProcessUtils:
                 # Add `session_number`
                 df["session_number"] = session_num
                 # Split `contentId`
-                df.sort_values(by=["impressTimeFormatted"], inplace=True)
+                df.sort_values(by=["timestamp"], inplace=True)
                 # Fill `nan` randomly using the last or next value
                 df["contentId"] = df["contentId"].fillna(value="-1,-1,-1")
                 split_content_id_columns = ["contentId_1", "contentId_2", "contentId_3"]
@@ -138,12 +143,9 @@ class DataProcessUtils:
                 # Fill `-1` in `talkId`
                 df["talkId"] = df["talkId"].fillna(value="-1")
                 df["talkId"] = df["talkId"].map(lambda x: str(int(x)))
-                # Make sure `mlogViewTime` > 0 when `isClick` == 1, set the `nan` to 0.1
-                df.loc[df['isClick'] == 1,
-                       'mlogViewTime'] = df.loc[df['isClick'] == 1,
-                                                'mlogViewTime'].map(lambda t: 0.1 if pd.isna(t) else t)
-                df.loc[df['isClick'] == 1, 'mlogViewTime'] = df.loc[df['isClick'] == 1,
-                                                                    'mlogViewTime'].clip(lower=0.1)
+                # Make sure `mlogViewTime` > 0 when `isClick` == 1, set the `nan` to 0.0
+                df.loc[df['isClick'] == 1, 'mlogViewTime'] = df.loc[df['isClick'] == 1, 'mlogViewTime'].map(
+                    lambda t: 0.0 if pd.isna(t) else t)
             new_filtered_session_data[user] = df_tuple_list
         return new_filtered_session_data
 
@@ -276,7 +278,7 @@ class DataProcessUtils:
             logging.info(f"All converted tensors are saved to {save_converted_tensors_path}")
 
     def _split_list_to_chunk(self, ls: List):
-        chunk_size = (len(ls) + self._chunk_num - 1) // self._chunk_num
+        chunk_size = (len(ls) + self._num_chunks - 1) // self._num_chunks
         chunks = [ls[i:i + chunk_size] for i in range(0, len(ls), chunk_size)]
         return chunks
 
@@ -292,9 +294,9 @@ class DataProcessUtils:
 
     def _add_aux_columns(self):
         # Collect all users sessions data to `self._user_session_data`
-        logging.info("Gathering all users sessions data...")
+        logging.info("Gathering all users' sessions data...")
         split_impression_data = self._data.groupby("userId").apply(
-            lambda x: self._split_to_sessions(df=x, group_key="impressTimeFormatted"))
+            lambda x: self._split_to_sessions(input_dataframe=x, group_key="timestamp"))
         self._user_session_data = {}
         for ind in tqdm(split_impression_data.index):
             self._user_session_data[ind] = []
@@ -383,8 +385,8 @@ class DataProcessUtils:
                                                                          subsample_size=subsample_size,
                                                                          subsample_seed=subsample_seed,
                                                                          save_subsample_data=save_subsample_data)
-        session_data = self._add_user_activity_index(session_data)
         non_nan_filtered_session_data = self._fill_nan(session_data)
+        non_nan_filtered_session_data = self._add_user_activity_index(non_nan_filtered_session_data)
         results_save_path = self._set_results_save_path(save_dir=save_dir,
                                                         subsample_size=subsample_size,
                                                         subsample_seed=subsample_seed)
@@ -407,11 +409,11 @@ class DataProcessUtils:
                 source_dir = f"{save_dir}/source data"
                 if not os.path.exists(source_dir):
                     os.makedirs(source_dir)
-                with open(f"{source_dir}/session data subsampled size {subsample_size} seed {subsample_seed}.pkl",
+                with open(f"{source_dir}/session data subsample size {subsample_size} seed {subsample_seed}.pkl",
                           "wb") as f:
                     pickle.dump(filtered_session_data, f)
                 logging.info(
-                    f"Subsampled session data saved to {source_dir}/session data subsampled size {subsample_size} seed"
+                    f"Subsample session data saved to {source_dir}/session data subsample size {subsample_size} seed"
                     f" {subsample_seed}.pkl")
         else:
             filtered_session_data = self._subsample_session_data(filtered_session_data, subsample_size)
@@ -419,10 +421,10 @@ class DataProcessUtils:
                 source_dir = f"{save_dir}/source data"
                 if not os.path.exists(source_dir):
                     os.makedirs(source_dir)
-                with open(f"{source_dir}/session data subsampled size {subsample_size}.pkl", "wb") as f:
+                with open(f"{source_dir}/session data subsample size {subsample_size}.pkl", "wb") as f:
                     pickle.dump(filtered_session_data, f)
                 logging.info(
-                    f"Subsampled session data saved to {source_dir}/session data subsampled size {subsample_size}.pkl"
+                    f"Subsample session data saved to {source_dir}/session data subsample size {subsample_size}.pkl"
                 )
         return filtered_session_data
 
@@ -430,9 +432,9 @@ class DataProcessUtils:
     def _set_results_save_path(save_dir, subsample_seed, subsample_size):
         results_save_path = f"{save_dir}/processed data"
         if subsample_size:
-            results_save_path = f"{save_dir}/processed data subsampled size {subsample_size}"
+            results_save_path = f"{save_dir}/processed data subsample size {subsample_size}"
             if subsample_seed:
-                results_save_path = f"{save_dir}/processed data subsampled size {subsample_size} seed {subsample_seed}"
+                results_save_path = f"{save_dir}/processed data subsample size {subsample_size} seed {subsample_seed}"
         if not os.path.exists(results_save_path):
             os.makedirs(results_save_path)
         return results_save_path
@@ -445,7 +447,7 @@ class DataProcessUtils:
                            just_save_data=False,
                            just_save_ranges=False,
                            min_clicked_session_num: int = 1,
-                           save_full_and_session_data=False,
+                           save_concat_and_session_data=False,
                            save_converted_tensors=False,
                            use_session_data_pkl=False,
                            session_data_pkl_path: str = None,
@@ -457,42 +459,28 @@ class DataProcessUtils:
          `userId` will not be divided to different chunks.
         :param ranges_pickle_path: The session_data_path to the pickle file of user range data
         :param sorted_data_path: The session_data_path to the sorted_data
-        :param session_length_range:
-        :param min_max_clicked_cards_num:
-        :param just_save_data:
-        :param just_save_ranges:
-        :param min_clicked_session_num:
-        :param save_full_and_session_data:
-        :param save_converted_tensors:
-        :param session_data_pkl_path:
-        :param use_session_data_pkl:
-        :param subsample_size:
-        :param subsample_seed:
-        :param save_subsample_data:
+        :param session_length_range: 
+        :param min_max_clicked_cards_num: 
+        :param just_save_data: 
+        :param just_save_ranges: 
+        :param min_clicked_session_num: 
+        :param save_concat_and_session_data: 
+        :param save_converted_tensors: 
+        :param session_data_pkl_path: 
+        :param use_session_data_pkl: 
+        :param subsample_size: 
+        :param subsample_seed: 
+        :param save_subsample_data: 
         :return:
         """
-        logging.info("Just reserve clicked behavior data...")
-        save_dir = f"./session {session_length_range[0]}-{session_length_range[1]} " \
-                   f"min clicked cards num {min_max_clicked_cards_num} min clicked " \
-                   f"session num {min_clicked_session_num}"
-        if use_session_data_pkl and session_data_pkl_path:
-            logging.info(f"Using saved session data {session_data_pkl_path}, skip processing steps...")
-            self._skip_process_and_convert_to_tensor(session_data_pkl_path=session_data_pkl_path,
-                                                     save_dir=save_dir,
-                                                     save_converted_tensors=save_converted_tensors,
-                                                     subsample_size=subsample_size,
-                                                     subsample_seed=subsample_seed,
-                                                     save_subsample_data=save_subsample_data)
-            return True
-
-        logging.info(f"The whole dataset will be divided into {self._chunk_num} chunks...")
         if just_save_data:
-            sorted_data = self._data.sort_values(by=["userId"], ascending=True, ignore_index=True)
+            sorted_data = self._data.sort_values(by=["userId"], ignore_index=True)
             sorted_data.to_csv(sorted_data_path, encoding="utf-8", index=False)
             logging.info(f"Save the sorted whole data to {sorted_data_path}")
             return True
 
         if just_save_ranges:
+            logging.info(f"Loading the sorted dataset from {sorted_data_path}...")
             sorted_data = pd.read_csv(sorted_data_path, encoding="utf-8")
             user_ranges = sorted_data.groupby("userId")["userId"].agg([("start", lambda x: x.index.min()),
                                                                        ("end", lambda x: x.index.max())
@@ -506,42 +494,56 @@ class DataProcessUtils:
                 logging.info(f"Save the user ranges info to {ranges_pickle_path}")
             return True
 
+        save_dir = f"./session {session_length_range[0]}-{session_length_range[1]} " \
+                   f"min clicked cards num {min_max_clicked_cards_num} min clicked " \
+                   f"session num {min_clicked_session_num}"
+        if use_session_data_pkl and session_data_pkl_path:
+            logging.info(f"Using saved session data {session_data_pkl_path}, skip processing steps...")
+            self._skip_process_and_convert_to_tensor(session_data_pkl_path=session_data_pkl_path,
+                                                     save_dir=save_dir,
+                                                     save_converted_tensors=save_converted_tensors,
+                                                     subsample_size=subsample_size,
+                                                     subsample_seed=subsample_seed,
+                                                     save_subsample_data=save_subsample_data)
+            return True
+
+        logging.info(f"The whole dataset will be divided into {self._num_chunks} chunks...")
         logging.info(f"Loading the sorted dataset from {sorted_data_path}...")
         with open(ranges_pickle_path, "rb") as f:
             logging.info(f"Loading user ranges info from {ranges_pickle_path}...")
             user_ranges_lists = pickle.load(f)
 
         filtered_session_data = []
-        filtered_full_data = []
-        for i, batch_users in enumerate(user_ranges_lists):
+        filtered_concat_data = []
+        for i, batch in enumerate(user_ranges_lists):
             logging.info(f"Processing chunk {i + 1}/{len(user_ranges_lists)}")
-            start = batch_users[0][0]
-            end = batch_users[-1][1]
+            start = batch[0][0]
+            end = batch[-1][1]
             batch_users_data = pd.read_csv(sorted_data_path,
                                            skiprows=range(start + 1),
                                            nrows=end - start + 1,
                                            encoding="utf-8",
                                            header=None,
                                            names=self._columns)
-            batch_users_data["impressTimeFormatted"] = batch_users_data["impressTimeFormatted"].map(pd.to_datetime)
+            batch_users_data["timestamp"] = batch_users_data["timestamp"].map(pd.to_datetime)
             batch_users_data = self._delete_unbalanced_feature(batch_users_data)
             self._reset_data(new_data=batch_users_data)
             self._add_aux_columns()
             self._filter_data(session_range=session_length_range,
                               min_max_clicked_cards_num=min_max_clicked_cards_num,
                               min_clicked_session_length=min_clicked_session_num)
-            filtered_full_data.append(self._filtered_data)
+            filtered_concat_data.append(self._filtered_data)
             filtered_session_data.append(self._filtered_session_data)
-        filtered_full_data = pd.concat(filtered_full_data, ignore_index=True)
+        filtered_concat_data = pd.concat(filtered_concat_data, ignore_index=True)
         filtered_session_data = self._merge_dicts(filtered_session_data)
-        if save_full_and_session_data:
+        if save_concat_and_session_data:
             source_dir = f"{save_dir}/source data"
             if not os.path.exists(source_dir):
                 os.makedirs(source_dir)
-            filtered_full_data.to_csv(f"{source_dir}/full data.csv", encoding="utf-8", index=False)
+            filtered_concat_data.to_csv(f"{source_dir}/concat data.csv", encoding="utf-8", index=False)
             with open(f"{source_dir}/session data.pkl", "wb") as f:
                 pickle.dump(filtered_session_data, f)
-            logging.info(f"Full data saved to {source_dir}/full data.csv")
+            logging.info(f"Concat data saved to {source_dir}/concat data.csv")
             logging.info(f"Session data save to {source_dir}/session data.pkl")
 
         if subsample_size:
@@ -553,8 +555,8 @@ class DataProcessUtils:
                 subsample_size=subsample_size)
 
         # continue to converting to tensor
-        filtered_session_data = self._add_user_activity_index(filtered_session_data)
         non_nan_filtered_session_data = self._fill_nan(filtered_session_data)
+        non_nan_filtered_session_data = self._add_user_activity_index(non_nan_filtered_session_data)
         results_save_path = self._set_results_save_path(save_dir, subsample_seed, subsample_size)
         max_c_cards_num, label_encoders = self._encode_data(session_data=non_nan_filtered_session_data,
                                                             encoder_save_path=results_save_path)
