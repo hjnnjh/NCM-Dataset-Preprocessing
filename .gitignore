@@ -167,3 +167,6 @@ fig/
 *.csv
 *.ipynb
 *.zip
+
+# macOS
+.DS_Store
