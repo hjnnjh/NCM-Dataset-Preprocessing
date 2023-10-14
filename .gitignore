@@ -163,9 +163,6 @@ cython_debug/
 .ipynb_checkpoints/
 fig/
 *.pkl
-!columns.pkl
-!user_ranges_lists_chunk_num_50.pkl
-!user_ranges_lists_chunk_num_200.pkl
 *.pt
 *.csv
 *.ipynb
