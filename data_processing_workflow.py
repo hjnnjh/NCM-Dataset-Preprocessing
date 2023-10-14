@@ -88,6 +88,9 @@ class DataIO:
     def load_encoders(self) -> Dict:
         pass
 
+    def update_session_data_file(self, session_data_file: str) -> None:
+        self.session_data_file = session_data_file
+
     def load_session_data(self) -> Dict:
         self.file_handler.check_path_exists(self.session_data_file, False)
         logging.info(f"Loading session data from {self.session_data_file}...")
@@ -299,7 +302,7 @@ class Preprocessing:
         logging.info(f"Subsampling {self.subsample_size} user session data...")
         logging.info(f"Set random seed to {self.subsample_seed}...")
         random.seed(self.subsample_seed)
-        random_keys = random.sample(list(self.session_data.keys()), self.subsample_seed)
+        random_keys = random.sample(list(self.session_data.keys()), self.subsample_size)
         subset_session_data = {k: self.session_data[k] for k in random_keys}
         self.update_session_data(subset_session_data)
 
@@ -605,6 +608,7 @@ class DataProcessingWorkflow:
             self.data_io.save_session_data(self.preprocessor.get_session_data())
         self.subsample_encode_transform_workflow()
 
-    def run_with_input_session_data(self) -> None:
+    def run_with_input_session_data(self, session_data_file: str) -> None:
+        self.data_io.update_session_data_file(session_data_file)
         self.preprocessor.update_session_data(self.data_io.load_session_data())
         self.subsample_encode_transform_workflow()
