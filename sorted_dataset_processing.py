@@ -71,9 +71,9 @@ class CardClickScrollProcessor:
 
     def _transform_json_data(self) -> None:
         """
-        Transfer the json data to the csv format.
+        Transfer the json input_dataframe to the csv format.
         """
-        logging.info("Transforming json data to csv format...")
+        logging.info("Transforming json input_dataframe to csv format...")
         assert "detailMlogInfoList" in self.sorted_dataframe.columns
         self.sorted_dataframe["detailMlogInfoList"] = self.sorted_dataframe["detailMlogInfoList"].apply(
             lambda x: pd.json_normalize(json.loads(x.replace("'", '"'))) if isinstance(x, str) else x)
@@ -108,7 +108,7 @@ class CardClickScrollProcessor:
         :return:
         """
         self._align_columns()
-        logging.info("Inserting scroll data to whole dataset...")
+        logging.info("Inserting scroll input_dataframe to whole dataset...")
         scroll_data_list = self.sorted_dataframe["detailMlogInfoList"].dropna().tolist()
         scroll_data = pd.concat(scroll_data_list, ignore_index=True)
         assert self.sorted_dataframe.columns.tolist() == scroll_data.columns.tolist()
