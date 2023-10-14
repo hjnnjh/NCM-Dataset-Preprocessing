@@ -289,8 +289,7 @@ class Preprocessing:
             filtered_session_data[user] = df_tuple_list
         self.update_session_data(filtered_session_data)
 
-    def subsample_session_data(self) -> Dict[
-        str, List[Tuple[int, pd.DataFrame]]]:
+    def subsample_session_data(self):
         overall_length = len(self.session_data)
         if self.subsample_size > overall_length:
             logging.info(
@@ -302,7 +301,7 @@ class Preprocessing:
         random.seed(self.subsample_seed)
         random_keys = random.sample(list(self.session_data.keys()), self.subsample_seed)
         subset_session_data = {k: self.session_data[k] for k in random_keys}
-        return subset_session_data
+        self.update_session_data(subset_session_data)
 
     def encode_attributes(self):
         concat_data = self.get_concat_session_data()
