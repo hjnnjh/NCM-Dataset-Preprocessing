@@ -486,17 +486,12 @@ class Preprocessing:
 
     def filter_chunk_data(self) -> None:
         logging.info("Filtering suitable data via `sessionLength`...")
-        # self.chunk_data = self.chunk_data[
-        #     (self.chunk_data["sessionLength"] >= self.session_range[0])
-        #     & (self.chunk_data["sessionLength"] <= self.session_range[1])]
         self.chunk_data.query("@self.session_range[0] <= sessionLength <= @self.session_range[1]",
                               inplace=True)
         unique_users = self.chunk_data["userId"].unique()
         self.session_data = {user: session for user, session in self.session_data.items() if
                              user in unique_users}  # chunk session here
         logging.info("Filtering suitable data via `maxClickedCardsNum`...")
-        # self.chunk_data = self.chunk_data[
-        #     (self.chunk_data["maxClickedCardsNum"] >= self.min_max_num_clicked_cards)]
         self.chunk_data.query("@self.min_max_num_clicked_cards <= maxClickedCardsNum", inplace=True)
         unique_users = self.chunk_data["userId"].unique()
         self.session_data = {user: session for user, session in self.session_data.items() if
@@ -577,7 +572,7 @@ class DataProcessingWorkflow:
             subsample_seed=self.subsample_seed
         )
 
-    def subsample_encode_transform_workflow(self):
+    def subsample_encode_transform_workflow(self) -> None:
         self.preprocessor.subsample_session_data()
         self.data_io.save_subsample_session_data(self.preprocessor.get_session_data())
         self.data_io.save_subsample_concat_data(self.preprocessor.get_concat_session_data())
@@ -611,6 +606,6 @@ class DataProcessingWorkflow:
             self.data_io.save_session_data(self.preprocessor.get_session_data())
         self.subsample_encode_transform_workflow()
 
-    def run_with_input_session_data(self):
+    def run_with_input_session_data(self) -> None:
         self.preprocessor.update_session_data(self.data_io.load_session_data())
         self.subsample_encode_transform_workflow()
