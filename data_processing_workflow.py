@@ -182,6 +182,7 @@ class Preprocessing:
     watching_durations: List = field(default_factory=list)
     num_clicked_cards: List = field(default_factory=list)
     label_encoders: Dict[str, LabelEncoder] = field(default_factory=dict)
+    _overall_session_length: int = 0
 
     def update_chunk_data(self, input_data: pd.DataFrame) -> None:
         self.chunk_data = input_data
@@ -486,6 +487,15 @@ class Preprocessing:
         user_cards_num = pd.DataFrame(user_cards_num)
         self.chunk_data = self.chunk_data.merge(user_cards_num, on="userId")
 
+    def summarize_session_length_in_chunk_data(self) -> None:
+        self._overall_session_length += self.chunk_data[
+                                            ["userId", "sessionLength"]].drop_duplicates().loc[:,
+                                        "sessionLength"].sum()
+        logging.info(f"Overall session length: {self._overall_session_length}")
+
+    def get_overall_session_length(self) -> int:
+        return self._overall_session_length
+
     def filter_chunk_data(self) -> None:
         logging.info("Filtering suitable data via `sessionLength`...")
         self.chunk_data.query("@self.session_range[0] <= sessionLength <= @self.session_range[1]",
@@ -581,13 +591,17 @@ class DataProcessingWorkflow:
         self.preprocessor.encode_attributes()
         self.preprocessor.transform_observed_data_to_tensors_workflow()
 
-    def run(self) -> None:
+    def pre_run(self):
         logging.info(f"The whole dataset will be divided into {self.num_chunks} chunks...")
         logging.info(f"Loading the sorted dataset from {self.sorted_data_file}...")
         if self.overwrite_ranges:
             self.preprocessor.overwrite_ranges()
         user_ranges_list = self.data_io.load_user_ranges()
         columns = self.data_io.get_sorted_data_columns()
+        return columns, user_ranges_list
+
+    def run(self) -> None:
+        columns, user_ranges_list = self.pre_run()
         for ind, batch in enumerate(user_ranges_list):
             logging.info(f"Processing chunk {ind + 1}/{self.num_chunks}")
             start = batch[0][0]
@@ -612,3 +626,18 @@ class DataProcessingWorkflow:
         self.data_io.update_session_data_file(session_data_file)
         self.preprocessor.update_session_data(self.data_io.load_session_data())
         self.subsample_encode_transform_workflow()
+
+    def compute_session_length_of_whole_dataset(self) -> None:
+        columns, user_ranges_list = self.pre_run()
+        for ind, batch in enumerate(user_ranges_list):
+            logging.info(f"Processing chunk {ind + 1}/{self.num_chunks}")
+            start = batch[0][0]
+            end = batch[-1][1]
+            chunk_data = self.data_io.load_batch_sorted_data(columns, start, end)
+            self.preprocessor.update_chunk_data(chunk_data)
+            self.preprocessor.convert_time_format()
+            self.preprocessor.delete_unbalanced_feature()
+            self.preprocessor.add_aux_columns_in_chunk_data()
+            self.preprocessor.summarize_session_length_in_chunk_data()
+            self.preprocessor.reset_session_data()
+        logging.info(f"Overall session length: {self.preprocessor.get_overall_session_length()}")
