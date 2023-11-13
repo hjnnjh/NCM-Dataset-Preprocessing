@@ -23,8 +23,9 @@ logging.basicConfig(
 
 class CardClickScrollProcessor:
     """
-    This script is used to process the whole dataset, which mainly deals with the context that a user clicks on a card and
-    then continues scrolling down through other cards recommended by the platform without returning to the home page.
+    This script is used to process the whole dataset, which mainly deals with the context
+    that a user clicks on a card and then continues scrolling down through other cards recommended
+    by the platform without returning to the home page.
     """
 
     def __init__(self, sorted_dataframe: pd.DataFrame = None, dataset_path: str = None) -> None:
@@ -37,7 +38,8 @@ class CardClickScrollProcessor:
     @staticmethod
     def _transform_logtime(input_data: pd.DataFrame) -> pd.DataFrame:
         assert "logtime" in input_data.columns
-        input_data["logtimeFormatted"] = input_data["logtime"].map(lambda t: datetime.fromtimestamp(int(t[:10])))
+        input_data["logtimeFormatted"] = input_data["logtime"].map(
+            lambda t: datetime.fromtimestamp(int(t[:10])))
         return input_data
 
     @staticmethod
@@ -75,10 +77,13 @@ class CardClickScrollProcessor:
         """
         logging.info("Transforming json input_dataframe to csv format...")
         assert "detailMlogInfoList" in self.sorted_dataframe.columns
-        self.sorted_dataframe["detailMlogInfoList"] = self.sorted_dataframe["detailMlogInfoList"].apply(
-            lambda x: pd.json_normalize(json.loads(x.replace("'", '"'))) if isinstance(x, str) else x)
-        self.sorted_dataframe["detailMlogInfoList"] = self.sorted_dataframe.apply(self._add_aux_columns_to_scroll_data,
-                                                                                  axis=1)
+        self.sorted_dataframe["detailMlogInfoList"] = self.sorted_dataframe[
+            "detailMlogInfoList"].apply(
+            lambda x: pd.json_normalize(json.loads(x.replace("'", '"'))) if isinstance(x,
+                                                                                       str) else x)
+        self.sorted_dataframe["detailMlogInfoList"] = self.sorted_dataframe.apply(
+            self._add_aux_columns_to_scroll_data,
+            axis=1)
 
     def _align_columns(self) -> None:
         self._add_required_columns_to_whole_dataset()
@@ -94,17 +99,21 @@ class CardClickScrollProcessor:
             if col not in original_columns:
                 self.sorted_dataframe[col] = np.nan
             if col not in scroll_data_columns:
-                self.sorted_dataframe["detailMlogInfoList"] = self.sorted_dataframe["detailMlogInfoList"].apply(
-                    lambda x: self._assign_new_column(x, col, np.nan) if self._is_not_empty_dataframe(x) else np.nan)
+                self.sorted_dataframe["detailMlogInfoList"] = self.sorted_dataframe[
+                    "detailMlogInfoList"].apply(
+                    lambda x: self._assign_new_column(x, col,
+                                                      np.nan) if self._is_not_empty_dataframe(
+                        x) else np.nan)
         # rearrange columns
         self.sorted_dataframe = self.sorted_dataframe[merged_columns]
-        self.sorted_dataframe["detailMlogInfoList"] = self.sorted_dataframe["detailMlogInfoList"].apply(
+        self.sorted_dataframe["detailMlogInfoList"] = self.sorted_dataframe[
+            "detailMlogInfoList"].apply(
             lambda x: x[merged_columns] if self._is_not_empty_dataframe(x) else np.nan)
 
     def insert_scroll_data_to_whole_dataset(self) -> None:
         """
-        Get the index of the row where the detailMlogInfoList column is not 'nan' and insert the converted dataframe of
-         detailMlogInfoList under the corresponding index row
+        Get the index of the row where the detailMlogInfoList column is not 'nan' and insert the
+        converted dataframe of detailMlogInfoList under the corresponding index row
         :return:
         """
         self._align_columns()
@@ -127,11 +136,13 @@ class CardClickScrollProcessor:
         self.sorted_dataframe = pd.merge(self.sorted_dataframe, mlog_info, on="mlogId", how="left",
                                          suffixes=("_impression", "_df_mlog"))
         # drop the columns with suffix "_impression"
-        self.sorted_dataframe.drop([col for col in self.sorted_dataframe.columns if col.endswith("_impression")],
-                                   axis=1, inplace=True)
+        self.sorted_dataframe.drop(
+            [col for col in self.sorted_dataframe.columns if col.endswith("_impression")],
+            axis=1, inplace=True)
         # rename the columns with suffix "_df_mlog"
-        self.sorted_dataframe.rename(columns={col: col[:-8] for col in self.sorted_dataframe.columns if
-                                              col.endswith("_df_mlog")}, inplace=True)
+        self.sorted_dataframe.rename(
+            columns={col: col[:-8] for col in self.sorted_dataframe.columns if
+                     col.endswith("_df_mlog")}, inplace=True)
 
     def merge_user_info(self, user_demographic_info_path: str) -> None:
         """
@@ -143,16 +154,19 @@ class CardClickScrollProcessor:
         self.sorted_dataframe = pd.merge(self.sorted_dataframe, user_info, on="userId", how="left",
                                          suffixes=("_impression", "_df_user"))
         # drop the columns with suffix "_impression"
-        self.sorted_dataframe.drop([col for col in self.sorted_dataframe.columns if col.endswith("_impression")],
-                                   axis=1, inplace=True)
+        self.sorted_dataframe.drop(
+            [col for col in self.sorted_dataframe.columns if col.endswith("_impression")],
+            axis=1, inplace=True)
         # rename the columns with suffix "_df_user"
-        self.sorted_dataframe.rename(columns={col: col[:-8] for col in self.sorted_dataframe.columns if
-                                              col.endswith("_df_user")}, inplace=True)
+        self.sorted_dataframe.rename(
+            columns={col: col[:-8] for col in self.sorted_dataframe.columns if
+                     col.endswith("_df_user")}, inplace=True)
 
     def merge_timestamps(self):
         """
-        Merge 'impressTimeFormatted' and 'logtimeFormatted' columns, and for each row, one of these columns must be
-        empty and the other not empty, preserving a non-empty value.
+        Merge 'impressTimeFormatted' and 'logtimeFormatted' columns,
+        and for each row, one of these columns must be empty and the other not empty, preserving a
+        non-empty value.
         :return:
         """
         logging.info("Merging timestamps...")
@@ -162,10 +176,12 @@ class CardClickScrollProcessor:
         assert "logtime" in self.sorted_dataframe.columns
         self.sorted_dataframe["timestamp"] = self.sorted_dataframe["impressTimeFormatted"].fillna(
             self.sorted_dataframe["logtimeFormatted"])
-        self.sorted_dataframe.drop(["impressTimeFormatted", "logtimeFormatted", "impressTime", "logtime"], axis=1,
-                                   inplace=True)
+        self.sorted_dataframe.drop(
+            ["impressTimeFormatted", "logtimeFormatted", "impressTime", "logtime"], axis=1,
+            inplace=True)
 
-    def do_processing(self, mlog_demographic_info_path: str = None, user_demographic_info_path: str = None) -> None:
+    def do_processing(self, mlog_demographic_info_path: str = None,
+                      user_demographic_info_path: str = None) -> None:
         logging.info("Processing the dataset...")
         self.insert_scroll_data_to_whole_dataset()
         if mlog_demographic_info_path:
