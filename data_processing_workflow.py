@@ -165,6 +165,7 @@ class Preprocessing:
     session_range: Tuple[int, int]
     min_max_num_clicked_cards: int
     min_num_sessions_with_clicks: int
+    min_num_clicked_cards_in_session: int = None
     num_chunks: int = None
     encoded_obs_attributes_names: Tuple[str] = (
         "songId", "artistId", "creatorId", "talkId",
@@ -243,9 +244,8 @@ class Preprocessing:
                     self.chunk_data["artistId"] != most_freq_artist_id)
             & (self.chunk_data["talkId"] != most_freq_talk_id)]
 
-    @staticmethod
     def _is_clicked_behavior_in_session(
-            session_data: Tuple[int, pd.DataFrame]) -> bool:
+            self, session_data: Tuple[int, pd.DataFrame]) -> bool:
         """
         If there are clicked behaviors in the dataframe of the user's single session
         :param session_data:
@@ -253,6 +253,10 @@ class Preprocessing:
         """
         each_dataframe_in_session = session_data[1]
         filtered_dataframe = each_dataframe_in_session[each_dataframe_in_session["isClick"] == 1]
+        filtered_dataframe_length = len(filtered_dataframe)
+        if self.min_num_clicked_cards_in_session:
+            if filtered_dataframe_length < self.min_num_clicked_cards_in_session:
+                return False
         if filtered_dataframe.empty:
             return False
         else:
@@ -514,9 +518,15 @@ class Preprocessing:
         self.session_data = {user: session for user, session in self.session_data.items() if
                              session is not None and len(
                                  session) >= self.min_num_sessions_with_clicks}
-        logging.info(f"Number of users with clicking behavior session "
-                     f"whose length is greater than {self.min_num_sessions_with_clicks}: "
-                     f"{len(self.session_data)}")
+        if self.min_num_clicked_cards_in_session:
+            logging.info(f"Number of users with clicking behavior session (num clicked cards "
+                         f"greater than {self.min_num_clicked_cards_in_session}) "
+                         f"whose length is greater than {self.min_num_sessions_with_clicks}: "
+                         f"{len(self.session_data)}")
+        else:
+            logging.info(f"Number of users with clicking behavior session "
+                         f"whose length is greater than {self.min_num_sessions_with_clicks}: "
+                         f"{len(self.session_data)}")
 
 
 @dataclass
@@ -525,6 +535,7 @@ class DataProcessingWorkflow:
     session_range: Tuple[int, int]
     min_max_num_clicked_cards: int
     min_num_sessions_with_clicks: int
+    min_num_clicked_cards_in_session: int = None
     sorted_data_file: str = None
     ranges_file: str = None
     num_chunks: int = None
@@ -578,6 +589,7 @@ class DataProcessingWorkflow:
             session_range=self.session_range,
             min_max_num_clicked_cards=self.min_max_num_clicked_cards,
             min_num_sessions_with_clicks=self.min_num_sessions_with_clicks,
+            min_num_clicked_cards_in_session=self.min_num_clicked_cards_in_session,
             num_chunks=self.num_chunks,
             encoded_obs_attributes_names=self.encoded_discrete_attribute_names,
             subsample_size=self.subsample_size,
