@@ -167,6 +167,7 @@ class Preprocessing:
     min_num_sessions_with_clicks: int
     min_num_clicked_cards_in_session: int = None
     num_chunks: int = None
+    interval_seconds: int = 3600
     encoded_obs_attributes_names: Tuple[str] = (
         "songId", "artistId", "creatorId", "talkId",
         "contentId_1", "contentId_2", "contentId_3")
@@ -196,8 +197,7 @@ class Preprocessing:
         chunk_size = (len(input_seq) + self.num_chunks - 1) // self.num_chunks
         return [input_seq[i:i + chunk_size] for i in range(0, len(input_seq), chunk_size)]
 
-    @staticmethod
-    def _split_to_sessions(input_dataframe: pd.DataFrame, group_key: str) -> DataFrameGroupBy:
+    def _split_to_sessions(self, input_dataframe: pd.DataFrame, group_key: str) -> DataFrameGroupBy:
         """
         Groups are grouped according to whether the time interval is longer than 1 hour,
         and a new group number is generated.
@@ -206,8 +206,9 @@ class Preprocessing:
         :return:
         """
         input_dataframe = input_dataframe.sort_values(by=group_key)
-        time_diff = input_dataframe[group_key].diff().fillna(pd.Timedelta(seconds=3600))
-        group_ids = (time_diff > pd.Timedelta(hours=1)).cumsum()
+        time_diff = input_dataframe[group_key].diff().fillna(
+            pd.Timedelta(seconds=self.interval_seconds))
+        group_ids = (time_diff > pd.Timedelta(seconds=self.interval_seconds)).cumsum()
         return input_dataframe.groupby(group_ids)
 
     @staticmethod
@@ -536,6 +537,7 @@ class DataProcessingWorkflow:
     min_max_num_clicked_cards: int
     min_num_sessions_with_clicks: int
     min_num_clicked_cards_in_session: int = None
+    interval_seconds: int = 3600
     sorted_data_file: str = None
     ranges_file: str = None
     num_chunks: int = None
@@ -591,6 +593,7 @@ class DataProcessingWorkflow:
             min_num_sessions_with_clicks=self.min_num_sessions_with_clicks,
             min_num_clicked_cards_in_session=self.min_num_clicked_cards_in_session,
             num_chunks=self.num_chunks,
+            interval_seconds=self.interval_seconds,
             encoded_obs_attributes_names=self.encoded_discrete_attribute_names,
             subsample_size=self.subsample_size,
             subsample_seed=self.subsample_seed
