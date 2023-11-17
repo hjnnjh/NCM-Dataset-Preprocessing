@@ -258,7 +258,7 @@ class Preprocessing:
         """
         session_ind, session_df = session_data
         session_df = session_df.query("mlogViewTime < @quantile_value")
-        session_df.loc[:, "NumClickedCards"] = len(session_df.query("isClick == 1"))
+        session_df["NumClickedCards"] = len(session_df.loc[session_df["isClick"] == 1])
         return session_ind, session_df
 
     def delete_anomalous_view_time_values(self, quantile_value: float) -> None:
@@ -414,12 +414,15 @@ class Preprocessing:
         self.data_io.save_ranges(user_ranges_lists)
 
     def _transform_session_lengths_and_discrete_attribute(self) -> None:
+        user_num = len(self.session_data)
         for ind, attr in enumerate(self.encoded_obs_attributes_names):
             logging.info(
                 f"Converting attribute {ind + 1}/{len(self.encoded_obs_attributes_names)}...")
             self.obs_attributes_in_clicked_cards[attr] = []
             for user, df_tuple_list in tqdm(self.session_data.items()):
-                self.session_lengths.append(len(df_tuple_list))
+                session_lengths_length = len(self.session_lengths)
+                if session_lengths_length < user_num:
+                    self.session_lengths.append(len(df_tuple_list))
                 user_attr_tensors_c = []
                 for _, df in df_tuple_list:
                     # label_encoder will treat int as str
