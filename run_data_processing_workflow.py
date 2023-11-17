@@ -11,18 +11,21 @@
 from data_processing_workflow import DataProcessingWorkflow
 
 NUM_CHUNKS = 25
+MIN_NUM_CLICKED_CARDS_IN_SESSION = 5
+MIN_NUM_SESSIONS_WITH_CLICKS = 5
+INTERVAL_SECONDS = 300
+SORTED_DATA_FILE = "./sorted_scroll_added_data.csv"
 
 workflow = DataProcessingWorkflow(
-    session_range=(15, 100),
-    min_max_num_clicked_cards=5,
-    min_num_sessions_with_clicks=8,
-    sorted_data_file="./sorted_scroll_added_data.csv",
+    min_num_sessions_with_clicks=MIN_NUM_SESSIONS_WITH_CLICKS,
+    min_num_clicked_cards_in_session=MIN_NUM_CLICKED_CARDS_IN_SESSION,
+    sorted_data_file=SORTED_DATA_FILE,
     ranges_file=f"./user_ranges_num_chunks_{NUM_CHUNKS}.pkl",
     num_chunks=NUM_CHUNKS,
-    subsample_size=4000,
-    subsample_seed=42,
+    interval_seconds=INTERVAL_SECONDS,
+    subsample_size=5000,
+    subsample_seed=1115,
     save_data_before_subsampling=True,
-    overwrite_ranges=True
 )
 
 workflow.run()

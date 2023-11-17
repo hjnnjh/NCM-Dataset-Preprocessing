@@ -162,8 +162,6 @@ class Preprocessing:
     """
     # Dependency attributes
     data_io: DataIO
-    session_range: Tuple[int, int]
-    min_max_num_clicked_cards: int
     min_num_sessions_with_clicks: int
     min_num_clicked_cards_in_session: int = None
     num_chunks: int = None
@@ -184,7 +182,7 @@ class Preprocessing:
     watching_durations: List = field(default_factory=list)
     num_clicked_cards: List = field(default_factory=list)
     label_encoders: Dict[str, LabelEncoder] = field(default_factory=dict)
-    _overall_session_length: int = 0
+    _overall_num_sessions: int = 0
 
     def update_chunk_data(self, input_data: pd.DataFrame) -> None:
         self.chunk_data = input_data
@@ -199,7 +197,7 @@ class Preprocessing:
 
     def _split_to_sessions(self, input_dataframe: pd.DataFrame, group_key: str) -> DataFrameGroupBy:
         """
-        Groups are grouped according to whether the time interval is longer than 1 hour,
+        Groups are grouped according to whether the time interval is longer than the specified
         and a new group number is generated.
         :param input_dataframe:
         :param group_key:
@@ -233,19 +231,98 @@ class Preprocessing:
                 time_delta = df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]
                 if df["isClick"].iloc[-1] == 1 or df["isScroll"].iloc[-1] == 1:
                     time_delta += pd.Timedelta(seconds=df["mlogViewTime"].iloc[-1])
-                df["activityIndex"] = time_delta.total_seconds()
+                num_watched_cards = len(df.query("isClick == 1 | isScroll == 1"))
+                session_duration_minutes = time_delta.total_seconds() / 60
+                # interaction rate per minutes
+                df["activityIndex"] = num_watched_cards / session_duration_minutes
 
     def delete_unbalanced_feature(self):
         logging.info("Deleting unbalanced feature in `songId`, `artistId` and `talkId`")
         most_freq_song_id = self.chunk_data["songId"].value_counts().index[0]
         most_freq_artist_id = self.chunk_data["artistId"].value_counts().index[0]
         most_freq_talk_id = self.chunk_data["talkId"].value_counts().index[0]
-        self.chunk_data = self.chunk_data[
-            (self.chunk_data["songId"] != most_freq_song_id) & (
-                    self.chunk_data["artistId"] != most_freq_artist_id)
-            & (self.chunk_data["talkId"] != most_freq_talk_id)]
+        self.chunk_data = self.chunk_data.query(
+            "songId != @most_freq_song_id and artistId != @most_freq_artist_id and talkId != @most_freq_talk_id")
 
-    def _is_clicked_behavior_in_session(
+    @staticmethod
+    def get_mlog_view_time_quantile(concat_data: pd.DataFrame) -> float:
+        concat_data = concat_data.query("isClick == 1")
+        return concat_data["mlogViewTime"].quantile(0.99)
+
+    @staticmethod
+    def _delete_anomalous_view_time_value_row(session_data: Tuple[int, pd.DataFrame],
+                                              quantile_value: float) -> Tuple[int, pd.DataFrame]:
+        """
+        If the row of `mlogViewTime` is anomalous, delete it.
+        :return:
+        """
+        session_ind, session_df = session_data
+        session_df = session_df.query("mlogViewTime < @quantile_value")
+        session_df.loc[:, "NumClickedCards"] = len(session_df.query("isClick == 1"))
+        return session_ind, session_df
+
+    def delete_anomalous_view_time_values(self, quantile_value: float) -> None:
+        logging.info(f"Deleting anomalous rows refer to `mlogViewTime` 0.99 quantile "
+                     f"{quantile_value}...")
+
+        def filter_sessions(session_list: List[Tuple[int, pd.DataFrame]], quantile: float) -> Union[
+            List[Tuple[int, pd.DataFrame]], None]:
+            session_list = list(
+                map(lambda session: self._delete_anomalous_view_time_value_row(session, quantile),
+                    session_list))
+            if session_list:
+                return session_list
+
+        self.session_data = {user: filter_sessions(sessions, quantile_value) for user, sessions in
+                             self.session_data.items()}
+        self.session_data = {user: sessions for user, sessions in self.session_data.items() if
+                             sessions}
+
+    def get_activity_index_quantile(self) -> float:
+        activity_index_list = []
+        for user, sessions in self.session_data.items():
+            for _, df in sessions:
+                activity_index = df["activityIndex"].unique()
+                assert activity_index.shape[
+                           0] == 1, "There are multiple activity index in a session"
+                activity_index_list.append(activity_index[0])
+        return pd.Series(activity_index_list).quantile(0.99)
+
+    @staticmethod
+    def _is_session_activity_index_anomalous(session_data: Tuple[int, pd.DataFrame],
+                                             quantile_value: float) -> bool:
+        """
+        If the session activity index is anomalous
+        :param session_data:
+        :return:
+        """
+        session_df = session_data[1]
+        activity_index = session_df["activityIndex"].unique()
+        assert activity_index.shape[0] == 1, "There are multiple activity index in a session"
+        activity_index_value = activity_index[0]
+        if activity_index_value > quantile_value:
+            return False
+        else:
+            return True
+
+    def delete_anomalous_activity_index_values(self, quantile_value: float) -> None:
+        logging.info(f"Deleting anomalous session refer to `activityIndex` 0.99 quantile "
+                     f"{quantile_value}...")
+
+        def filter_sessions(session_list: List[Tuple[int, pd.DataFrame]], quantile: float) -> Union[
+            List[Tuple[int, pd.DataFrame]], None]:
+            session_list = list(
+                filter(lambda x: self._is_session_activity_index_anomalous(x, quantile),
+                       session_list))
+            if session_list:
+                return session_list
+
+        self.session_data = {user: filter_sessions(sessions, quantile_value) for user, sessions in
+                             self.session_data.items()}
+        self.session_data = {user: sessions for user, sessions in self.session_data.items() if
+                             sessions}
+
+    def _is_click_in_session(
             self, session_data: Tuple[int, pd.DataFrame]) -> bool:
         """
         If there are clicked behaviors in the dataframe of the user's single session
@@ -253,7 +330,7 @@ class Preprocessing:
         :return:
         """
         each_dataframe_in_session = session_data[1]
-        filtered_dataframe = each_dataframe_in_session[each_dataframe_in_session["isClick"] == 1]
+        filtered_dataframe = each_dataframe_in_session.query("isClick == 1")
         filtered_dataframe_length = len(filtered_dataframe)
         if self.min_num_clicked_cards_in_session:
             if filtered_dataframe_length < self.min_num_clicked_cards_in_session:
@@ -263,19 +340,19 @@ class Preprocessing:
         else:
             return True
 
-    def _reserve_session_with_click_behavior(self, session_data: List[
-        Tuple[int, pd.DataFrame]]) -> List[Tuple[int, pd.DataFrame]]:
+    def _reserve_session_with_clicks(self, session_data: List[
+        Tuple[int, pd.DataFrame]]) -> Union[List[Tuple[int, pd.DataFrame]], None]:
         """
         reserve clicked behavior sessions
         :param session_data:
         :return:
         """
         session_dataframe_list = list(
-            filter(self._is_clicked_behavior_in_session, session_data))
+            filter(self._is_click_in_session, session_data))
         if session_dataframe_list:
             return session_dataframe_list
 
-    def fill_nan(self):
+    def fill_nan(self) -> None:
         logging.info("Checking `nan` in dataset and fill it...")
         filtered_session_data = {}
         for user, df_tuple_list in tqdm(self.session_data.items()):
@@ -298,7 +375,7 @@ class Preprocessing:
             filtered_session_data[user] = df_tuple_list
         self.update_session_data(filtered_session_data)
 
-    def subsample_session_data(self):
+    def subsample_session_data(self) -> Union[Dict[str, List[Tuple[int, pd.DataFrame]]], None]:
         overall_length = len(self.session_data)
         if self.subsample_size > overall_length:
             logging.info(
@@ -312,16 +389,16 @@ class Preprocessing:
         subset_session_data = {k: self.session_data[k] for k in random_keys}
         self.update_session_data(subset_session_data)
 
-    def encode_attributes(self):
+    def encode_attributes(self) -> None:
         concat_data = self.get_concat_session_data()
-        concat_data = concat_data[concat_data["isClick"] == 1]
+        concat_data = concat_data.query("isClick == 1")
         self.label_encoders = {}
         for attr_name in self.encoded_obs_attributes_names:
             le = LabelEncoder()
             le.fit(concat_data[attr_name].values)
             self.label_encoders[attr_name] = le
             self.data_io.save_encoders(attr_name, le)
-        self.max_num_clicked_cards = concat_data["clickedCardsNum"].max()
+        self.max_num_clicked_cards = concat_data["NumClickedCards"].max()
 
     def overwrite_ranges(self) -> None:
         sorted_data = self.data_io.load_sorted_data()
@@ -337,17 +414,15 @@ class Preprocessing:
         self.data_io.save_ranges(user_ranges_lists)
 
     def _transform_session_lengths_and_discrete_attribute(self) -> None:
-        user_num = len(self.session_data)
         for ind, attr in enumerate(self.encoded_obs_attributes_names):
             logging.info(
                 f"Converting attribute {ind + 1}/{len(self.encoded_obs_attributes_names)}...")
             self.obs_attributes_in_clicked_cards[attr] = []
             for user, df_tuple_list in tqdm(self.session_data.items()):
+                self.session_lengths.append(len(df_tuple_list))
                 user_attr_tensors_c = []
-                session_lengths_len = len(self.session_lengths)
-                if session_lengths_len < user_num:
-                    self.session_lengths.append(len(df_tuple_list))
                 for _, df in df_tuple_list:
+                    # label_encoder will treat int as str
                     transformed_attr = self.label_encoders[attr].transform(
                         df.loc[df["isClick"] == 1, attr].values)
                     user_attr_tensors_c.append(torch.from_numpy(transformed_attr.astype(int)))
@@ -372,7 +447,7 @@ class Preprocessing:
                     torch.from_numpy(
                         df.loc[df["isClick"] == 1, "mlogViewTime"].values.astype(float)))
                 user_c_cards_num.append(
-                    torch.from_numpy(np.unique(df["clickedCardsNum"].values.astype(int))))
+                    torch.from_numpy(np.unique(df["NumClickedCards"].values.astype(int))))
             self.watching_durations.append(user_duration_tensors)
             self.num_clicked_cards.append(user_c_cards_num)
 
@@ -461,60 +536,28 @@ class Preprocessing:
     def convert_time_format(self) -> None:
         self.chunk_data['timestamp'] = pd.to_datetime(self.chunk_data['timestamp'])
 
-    def add_aux_columns_in_chunk_data(self) -> None:
+    def add_aux_columns_in_session_data(self) -> None:
         logging.info("Gathering all users' sessions data...")
         split_impression_data = self.chunk_data.groupby("userId").apply(
             lambda x: self._split_to_sessions(input_dataframe=x, group_key="timestamp"))
-        for ind in tqdm(split_impression_data.index):
-            self.session_data[ind] = []
-            for df in split_impression_data[ind]:
-                self.session_data[ind].append(df)
-        logging.info("Adding column `sessionLength`...")
-        user_session_length = {"userId": [], "sessionLength": []}
-        for user, session_list in self.session_data.items():
-            user_session_length["userId"].append(user)
-            user_session_length["sessionLength"].append(len(session_list))
-        user_session_length = pd.DataFrame(user_session_length)
-        self.chunk_data = self.chunk_data.merge(user_session_length, on="userId")
-        logging.info("Adding auxiliary columns `maxClickedCardsNum`, `minClickedCardsNum`...")
-        user_cards_num = {"userId": [], "maxClickedCardsNum": [], "minClickedCardsNum": []}
-        for user, session_list in tqdm(self.session_data.items()):
-            clicked_cards_nums = []
-            for _, df in session_list:
-                clicked_cards_num = len(df[df["isClick"] == 1])
-                df["clickedCardsNum"] = clicked_cards_num
-                clicked_cards_nums.append(clicked_cards_num)
-            max_clicked_cards_num = max(clicked_cards_nums)
-            min_clicked_cards_num = min(clicked_cards_nums)
-            user_cards_num["userId"].append(user)
-            user_cards_num["maxClickedCardsNum"].append(max_clicked_cards_num)
-            user_cards_num["minClickedCardsNum"].append(min_clicked_cards_num)
-        user_cards_num = pd.DataFrame(user_cards_num)
-        self.chunk_data = self.chunk_data.merge(user_cards_num, on="userId")
+        logging.info("Adding column `NumClickedCards` in session data...")
+        for user in tqdm(split_impression_data.index):
+            self.session_data[user] = []
+            for session_ind, session_df in split_impression_data[user]:
+                session_df["NumClickedCards"] = len(session_df[session_df["isClick"] == 1])
+                self.session_data[user].append((session_ind, session_df))
 
-    def summarize_session_length_in_chunk_data(self) -> None:
-        self._overall_session_length += self.chunk_data[
-                                            ["userId", "sessionLength"]].drop_duplicates().loc[:,
-                                        "sessionLength"].sum()
-        logging.info(f"Overall session length: {self._overall_session_length}")
+    def summarize_num_sessions(self) -> None:
+        for user, sessions in self.session_data.items():
+            self._overall_num_sessions += len(sessions)
+        logging.info(f"Num sessions: {self._overall_num_sessions}")
 
-    def get_overall_session_length(self) -> int:
-        return self._overall_session_length
+    def get_overall_num_sessions(self) -> int:
+        return self._overall_num_sessions
 
-    def filter_chunk_data(self) -> None:
-        logging.info("Filtering suitable data via `sessionLength`...")
-        self.chunk_data.query("@self.session_range[0] <= sessionLength <= @self.session_range[1]",
-                              inplace=True)
-        unique_users = self.chunk_data["userId"].unique()
-        self.session_data = {user: session for user, session in self.session_data.items() if
-                             user in unique_users}  # chunk session here
-        logging.info("Filtering suitable data via `maxClickedCardsNum`...")
-        self.chunk_data.query("@self.min_max_num_clicked_cards <= maxClickedCardsNum", inplace=True)
-        unique_users = self.chunk_data["userId"].unique()
-        self.session_data = {user: session for user, session in self.session_data.items() if
-                             user in unique_users}
+    def filter_sessions_via_num_clicked_cards(self):
         logging.info("Identifying sessions with clicking behaviors...")
-        self.session_data = {user: self._reserve_session_with_click_behavior(session) for
+        self.session_data = {user: self._reserve_session_with_clicks(session) for
                              user, session in self.session_data.items()}
         self.session_data = {user: session for user, session in self.session_data.items() if
                              session is not None and len(
@@ -533,8 +576,6 @@ class Preprocessing:
 @dataclass
 class DataProcessingWorkflow:
     # Input attributes
-    session_range: Tuple[int, int]
-    min_max_num_clicked_cards: int
     min_num_sessions_with_clicks: int
     min_num_clicked_cards_in_session: int = None
     interval_seconds: int = 3600
@@ -557,8 +598,7 @@ class DataProcessingWorkflow:
     def __post_init__(self) -> None:
         # Extra preliminary for `DataIO` dependency.
         file_handler = FileHandler()
-        parent_dir = (f"./session {self.session_range[0]}-{self.session_range[1]} "
-                      f"min clicked cards num {self.min_max_num_clicked_cards} "
+        parent_dir = (f"min clicked cards num in session {self.min_num_clicked_cards_in_session} "
                       f"min clicked session num {self.min_num_sessions_with_clicks}")
         source_data_dir = f"{parent_dir}/source data"
         results_dir = f"{parent_dir}/processed data"
@@ -588,8 +628,6 @@ class DataProcessingWorkflow:
         # Initialize the `Preprocessing` dependency.
         self.preprocessor = Preprocessing(
             data_io=self.data_io,
-            session_range=self.session_range,
-            min_max_num_clicked_cards=self.min_max_num_clicked_cards,
             min_num_sessions_with_clicks=self.min_num_sessions_with_clicks,
             min_num_clicked_cards_in_session=self.min_num_clicked_cards_in_session,
             num_chunks=self.num_chunks,
@@ -625,13 +663,19 @@ class DataProcessingWorkflow:
             self.preprocessor.update_chunk_data(chunk_data)
             self.preprocessor.convert_time_format()
             self.preprocessor.delete_unbalanced_feature()
-            self.preprocessor.add_aux_columns_in_chunk_data()
-            self.preprocessor.filter_chunk_data()
+            self.preprocessor.add_aux_columns_in_session_data()
+            self.preprocessor.filter_sessions_via_num_clicked_cards()
             self.all_session_data.append(self.preprocessor.get_session_data())
             self.preprocessor.reset_session_data()
         self.preprocessor.update_session_data(self.preprocessor.merge_dicts(self.all_session_data))
         self.preprocessor.fill_nan()
         self.preprocessor.add_user_activity_index()
+        mlog_view_time_quantile = self.preprocessor.get_mlog_view_time_quantile(
+            self.preprocessor.get_concat_session_data())
+        activity_index_quantile = self.preprocessor.get_activity_index_quantile()
+        self.preprocessor.delete_anomalous_activity_index_values(activity_index_quantile)
+        self.preprocessor.delete_anomalous_view_time_values(mlog_view_time_quantile)
+        self.preprocessor.filter_sessions_via_num_clicked_cards()
         if self.save_data_before_subsampling:
             self.data_io.save_concat_data(self.preprocessor.get_concat_session_data())
             self.data_io.save_session_data(self.preprocessor.get_session_data())
@@ -652,7 +696,8 @@ class DataProcessingWorkflow:
             self.preprocessor.update_chunk_data(chunk_data)
             self.preprocessor.convert_time_format()
             self.preprocessor.delete_unbalanced_feature()
-            self.preprocessor.add_aux_columns_in_chunk_data()
-            self.preprocessor.summarize_session_length_in_chunk_data()
+            self.preprocessor.add_aux_columns_in_session_data()
+            self.preprocessor.filter_sessions_via_num_clicked_cards()
+            self.preprocessor.summarize_num_sessions()
             self.preprocessor.reset_session_data()
-        logging.info(f"Overall session length: {self.preprocessor.get_overall_session_length()}")
+        logging.info(f"Overall num sessions: {self.preprocessor.get_overall_num_sessions()}")
