@@ -30,10 +30,8 @@ logging.basicConfig(
 )
 
 
+@dataclass
 class FileHandler:
-
-    def __init__(self):
-        pass
 
     @staticmethod
     def check_path_exists(path: str, create_dir: bool = False):
@@ -69,7 +67,7 @@ class DataIO:
     concat_data_file: str = field(default=str)
     subsample_session_data_file: str = field(default=str)
     subsample_concat_data_file: str = field(default=str)
-    file_handler: FileHandler = field(default=None)
+    file_handler: FileHandler = field(default_factory=FileHandler)
 
     def load_sorted_data(self) -> pd.DataFrame:
         self.file_handler.check_path_exists(self.sorted_data_file, False)
@@ -85,8 +83,11 @@ class DataIO:
             user_ranges = pickle.load(f)
         return user_ranges
 
-    def load_encoders(self) -> Dict:
-        pass
+    def load_encoders(self, encoder_file: str) -> LabelEncoder:
+        self.file_handler.check_path_exists(encoder_file, False)
+        with open(encoder_file, "rb") as f:
+            encoder = pickle.load(f)
+        return encoder
 
     def update_session_data_file(self, session_data_file: str) -> None:
         self.session_data_file = session_data_file
@@ -97,6 +98,10 @@ class DataIO:
         with open(self.session_data_file, "rb") as f:
             session_data = pickle.load(f)
         return session_data
+
+    def load_concat_data(self) -> pd.DataFrame:
+        self.file_handler.check_path_exists(self.concat_data_file, False)
+        return pd.read_csv(self.concat_data_file, encoding='utf-8')
 
     def load_batch_sorted_data(self, columns: List[str], ind_start: int,
                                ind_end: int) -> pd.DataFrame:
@@ -136,7 +141,7 @@ class DataIO:
             f"{self.encoders_dir}/LabelEncoder of {attribute_name}.pkl")
 
     def save_tensor(self, tensor_name: str,
-                    tensor_value: Union[torch.Tensor, Dict[str, torch.Tensor]]):
+                    tensor_value: Union[torch.Tensor, Dict[str, torch.Tensor], Dict[str, int]]):
         self.file_handler.check_path_exists(self.tensor_dir, True)
         torch.save(tensor_value, f"{self.tensor_dir}/{tensor_name}.pt")
         logging.info(f"Save {tensor_name} tensor to {self.tensor_dir}/{tensor_name}.pt")
@@ -231,10 +236,11 @@ class Preprocessing:
                 time_delta = df["timestamp"].iloc[-1] - df["timestamp"].iloc[0]
                 if df["isClick"].iloc[-1] == 1 or df["isScroll"].iloc[-1] == 1:
                     time_delta += pd.Timedelta(seconds=df["mlogViewTime"].iloc[-1])
-                num_watched_cards = len(df.query("isClick == 1 | isScroll == 1"))
-                session_duration_minutes = time_delta.total_seconds() / 60
                 # interaction rate per minutes
-                df["activityIndex"] = num_watched_cards / session_duration_minutes
+                # num_watched_cards = len(df.query("isClick == 1 | isScroll == 1"))
+                # session_duration_minutes = time_delta.total_seconds() / 60
+                # df["activityIndex"] = num_watched_cards / session_duration_minutes
+                df["activityIndex"] = time_delta.total_seconds()
 
     def delete_unbalanced_feature(self):
         logging.info("Deleting unbalanced feature in `songId`, `artistId` and `talkId`")
@@ -464,7 +470,7 @@ class Preprocessing:
             obs_attrs_c_bar.set_description("Reshaping obs attrs clicked")
             users_session_attr_c = []
             for each_user_session_attrs in attr_value:
-                # pad 1-d b_cards_num to max_c_cards_num first
+                # pad 1-d to max_c_cards_num first
                 pad_attrs = [
                     nn_func.pad(tensor_, (0, self.max_num_clicked_cards - tensor_.shape[0]),
                                 value=0,
@@ -600,7 +606,6 @@ class DataProcessingWorkflow:
 
     def __post_init__(self) -> None:
         # Extra preliminary for `DataIO` dependency.
-        file_handler = FileHandler()
         parent_dir = (f"min clicked cards num in session {self.min_num_clicked_cards_in_session} "
                       f"min clicked session num {self.min_num_sessions_with_clicks}")
         source_data_dir = f"{parent_dir}/source data"
@@ -624,8 +629,7 @@ class DataProcessingWorkflow:
             subsample_concat_data_file=subsample_concat_data_file,
             ranges_file=self.ranges_file,
             encoders_dir=encoders_dir,
-            tensor_dir=tensor_dir,
-            file_handler=file_handler
+            tensor_dir=tensor_dir
         )
 
         # Initialize the `Preprocessing` dependency.
@@ -641,9 +645,10 @@ class DataProcessingWorkflow:
         )
 
     def subsample_encode_transform_workflow(self) -> None:
-        self.preprocessor.subsample_session_data()
-        self.data_io.save_subsample_session_data(self.preprocessor.get_session_data())
-        self.data_io.save_subsample_concat_data(self.preprocessor.get_concat_session_data())
+        if self.subsample_size:
+            self.preprocessor.subsample_session_data()
+            self.data_io.save_subsample_session_data(self.preprocessor.get_session_data())
+            self.data_io.save_subsample_concat_data(self.preprocessor.get_concat_session_data())
         self.preprocessor.encode_attributes()
         self.preprocessor.transform_observed_data_to_tensors_workflow()
 
