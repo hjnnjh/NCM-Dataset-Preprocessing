@@ -11,8 +11,8 @@
 from data_processing_workflow import DataProcessingWorkflow
 
 NUM_CHUNKS = 25
-MIN_NUM_CLICKED_CARDS_IN_SESSION = 5
-MIN_NUM_SESSIONS_WITH_CLICKS = 10
+MIN_NUM_CLICKED_CARDS_IN_SESSION = 3
+MIN_NUM_SESSIONS_WITH_CLICKS = 5
 INTERVAL_SECONDS = 180
 SORTED_DATA_FILE = "./sorted_scroll_added_data.csv"
 

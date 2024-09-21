@@ -141,7 +141,8 @@ class DataIO:
             f"{self.encoders_dir}/LabelEncoder of {attribute_name}.pkl")
 
     def save_tensor(self, tensor_name: str,
-                    tensor_value: Union[torch.Tensor, Dict[str, torch.Tensor], Dict[str, int]]):
+                    tensor_value: Union[torch.Tensor, Dict[str, torch.Tensor], Dict[str, int], Dict[
+                        str, List[float]]]):
         self.file_handler.check_path_exists(self.tensor_dir, True)
         torch.save(tensor_value, f"{self.tensor_dir}/{tensor_name}.pt")
         logging.info(f"Save {tensor_name} tensor to {self.tensor_dir}/{tensor_name}.pt")
